@@ -80,6 +80,15 @@
   .hide { display:none; }
   .logout { width:100%; padding:14px; margin-top:20px; background:#3a2020; color:#fca5a5;
             border-radius:12px; border:none; font-size:15px; font-weight:600; cursor:pointer; }
+
+  /* 大盘入口 */
+  .entry { cursor:pointer; }
+  .entry:active { background:#1f232b; }
+  .entry-row { display:flex; align-items:center; justify-content:space-between; }
+  .entry-title { font-size:17px; font-weight:700; }
+  .entry-sub { font-size:12.5px; color:var(--dim); margin-top:4px; }
+  .entry-arrow { font-size:26px; color:var(--dim); line-height:1; }
+  .hint { font-size:12px; color:#6b7280; line-height:1.55; }
 </style>
 </head>
 <body>
@@ -108,15 +117,34 @@
       <div class="msg" id="roommsg"></div>
     </section>
 
-    <section>
-      <h2>📋 需要你回应的</h2>
-      <div id="prompts"><div class="empty">暂无</div></div>
+    <section class="entry" onclick="openReport()">
+      <div class="entry-row">
+        <div>
+          <div class="entry-title">📊 数据大盘</div>
+          <div class="entry-sub" id="entrySub">AI 答了多少、多少转给了你</div>
+        </div>
+        <div class="entry-arrow">›</div>
+      </div>
     </section>
+  </div>
 
+  <!-- ============ 数据大盘 ============ -->
+  <div id="paneRep" class="hide">
+    <button class="mini" style="margin:0 0 10px" onclick="showTab('live')">‹ 返回直播</button>
     <section>
-      <h2>🔊 AI 已回答</h2>
-      <div id="assists"><div class="empty">暂无</div></div>
+      <h2>AI 干了多少活</h2>
+      <div id="repHead"><div class="empty">加载中…</div></div>
     </section>
+    <section>
+      <h2>答不上来、转给你的问题</h2>
+      <div id="repGaps"><div class="empty">加载中…</div></div>
+      <div class="hint" style="margin-top:8px;color:#6b7280">同一类问题被问 2 次以上就会列在这里。把它补进设置，下次 AI 就能自己答。</div>
+    </section>
+    <section>
+      <h2>问得最多的问题</h2>
+      <div id="repHot"><div class="empty">加载中…</div></div>
+    </section>
+    <button class="save" onclick="loadReport()">刷新</button>
   </div>
 
   <!-- ============ 设置 ============ -->
@@ -171,7 +199,7 @@
 <audio id="player"></audio>
 
 <script>
-let ws=null, started=false, prompts=[], assists=[], authed=false;
+let ws=null, started=false, prompts=[], assists=[], authed=false, ME={};
 const $=id=>document.getElementById(id);
 const h=x=>x||{};
 const esc=t=>String(t??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -179,28 +207,22 @@ const esc=t=>String(t??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&g
 function showTab(t){
   $('paneLive').classList.toggle('hide',t!=='live');
   $('paneSet').classList.toggle('hide',t!=='set');
+  $('paneRep').classList.toggle('hide',t!=='rep');
   $('tabLive').classList.toggle('on',t==='live');
   $('tabSet').classList.toggle('on',t==='set');
   if(t==='set') loadKb();
+  if(t==='rep') loadReport();
 }
+
+function openReport(){ showTab('rep'); }
 
 function setStatus(text,cls){ const s=$('status'); s.textContent=text; s.className='status'+(cls?' '+cls:''); }
-
-function render(){
-  const now=Date.now();
-  $('prompts').innerHTML=prompts.length?prompts.map(p=>{
-    const stale=(now-(p.at||0))/1000>180?' stale':'';
-    const who=p.user?`<div class="who">${esc(p.user)}</div>`:'';
-    return `<div class="prompt-item${stale}">${who}<div class="what">${esc(p.text)}</div></div>`;
-  }).join(''):'<div class="empty">暂无</div>';
-  $('assists').innerHTML=assists.length?assists.map(a=>{
-    return `<div class="assist-item"><span class="tag">✓</span>${esc(a.text)}</div>`;
-  }).join(''):'<div class="empty">暂无</div>';
-}
 
 function renderStats(s){
   if(!s) return;
   $('stats').innerHTML=`AI答 ${s.assist_count||0}<br>转主播 ${s.prompt_count||0}`;
+  const sub=$('entrySub');
+  if(sub) sub.textContent=`AI 答了 ${s.assist_count||0} 条，转给你 ${s.prompt_count||0} 条`;
 }
 
 function connect(delay){
@@ -221,7 +243,7 @@ function handle(m){
     $('room').textContent=`${m.studio_name||m.room} · AI助播台`;
     $('roomInput').value=m.room_id||'';
     prompts=(m.pending||[]).map(p=>({...p,at:Date.now()}));
-    renderStats(m.stats); render();
+    renderStats(m.stats);
     const mb=$('muteBtn');
     if(m.muted){ mb.classList.add('on'); mb.textContent='🔇 已静音'; }
     setStatus(`已连接 · ${m.connected?'弹幕采集中':'等待弹幕'} · AI助手「${m.assistant_name}」`,'ok');
@@ -229,8 +251,8 @@ function handle(m){
     return;
   }
   if(m.type==='status'){ setStatus(m.text||'状态更新',m.live?'ok':''); return; }
-  if(m.type==='prompt'){ prompts.unshift({text:m.text,at:Date.now()}); prompts=prompts.slice(0,12); render(); return; }
-  if(m.type==='audio'){ assists.unshift({text:m.text,at:Date.now()}); assists=assists.slice(0,30); render(); speak(m.text,m.audio); }
+  if(m.type==='prompt'){ prompts.unshift({text:m.text,at:Date.now()}); prompts=prompts.slice(0,12); renderStats({prompt_count:prompts.length}); return; }
+  if(m.type==='audio'){ assists.unshift({text:m.text,at:Date.now()}); assists=assists.slice(0,30); renderStats({assist_count:assists.length}); speak(m.text,m.audio); }
 }
 
 /* 音频队列 */
@@ -277,12 +299,22 @@ function addRow(id,ph1,ph2){
   $(id).appendChild(div);
 }
 function readRows(id){
-  return [...$(id).querySelectorAll('div')].map(r=>({q:r.querySelector('.q')?.value?.trim()||'',a:r.querySelector('.a')?.value?.trim()||''})).filter(x=>x.q||x.a);
+  return [...$(id).children].map(r=>({
+    q: (r.querySelector('.q') && r.querySelector('.q').value || '').trim(),
+    a: (r.querySelector('.a') && r.querySelector('.a').value || '').trim()
+  })).filter(x=>x.q&&x.a);
 }
 function fillRows(id,items,ph1,ph2){
   $(id).innerHTML='';
   (items||[]).forEach(i=>{ addRow(id,ph1,ph2); const div=$(id).lastElementChild; div.querySelector('.q').value=i.q||''; div.querySelector('.a').value=i.a||''; });
 }
+
+/* 默认模板：开店常被问的就这几条，直接填空就行 */
+const DEFAULT_FAQS=[
+  {q:'几天发货',a:''},
+  {q:'能不能定制',a:''},
+  {q:'有现货吗',a:''}
+];
 
 async function loadKb(){
   try{
@@ -290,23 +322,27 @@ async function loadKb(){
     if(!r.ok) return;
     const d=await r.json();
     const p=d.profile||{};
-    $('k_studio').value=p.studio_name||'';
+    // 店名两处同源：知识库有就用，没有就用账号里的
+    $('k_studio').value=p.studio_name||ME.studio_name||'';
     $('k_assistant').value=p.assistant_name||'小陶';
     $('k_shipping').value=p.shipping||'';
     $('k_custom').value=p.custom||'';
     $('k_greeting').value=p.greeting||'';
     $('k_fallback').value=p.fallback||'';
     $('k_rules').value=(p.rules||[]).join('\n');
-    fillRows('k_faqs',p.craft_qa||[],'观众问','怎么答');
-    fillRows('k_products',(p.products||[]).map(x=>({q:x.name,a:x.price})),'商品名','价格');
+    const faqs=(p.craft_qa&&p.craft_qa.length)?p.craft_qa:DEFAULT_FAQS;
+    fillRows('k_faqs',faqs,'观众问','怎么答');
+    const prods=(p.products||[]).map(x=>({q:x.name,a:x.price}));
+    fillRows('k_products',prods.length?prods:[{q:'',a:''}],'商品名','价格');
   }catch(e){}
 }
 
 async function saveProfile(ev){
   const btn=ev.target; btn.textContent='保存中…'; btn.disabled=true;
+  const studio=$('k_studio').value.trim();
   const profile={
     assistant_name:$('k_assistant').value.trim()||'小陶',
-    studio_name:$('k_studio').value.trim(),
+    studio_name:studio,
     greeting:$('k_greeting').value.trim(), shipping:$('k_shipping').value.trim(),
     custom:$('k_custom').value.trim(), fallback:$('k_fallback').value.trim(),
     rules:$('k_rules').value.split('\n').map(s=>s.trim()).filter(Boolean),
@@ -318,7 +354,12 @@ async function saveProfile(ev){
     const r=await fetch('/api/kb',{method:'POST',headers:h({'Content-Type':'application/json'}),body:JSON.stringify({profile})});
     const d=await r.json();
     if(!r.ok||!d.ok){ m.className='msg err'; m.textContent='保存失败：'+(d.error||r.status); }
-    else{ m.className='msg ok'; m.textContent='已保存，AI 现在认识 '+d.faqs+' 类问题'; }
+    else{
+      m.className='msg ok';
+      m.textContent='已保存，AI 现在认识 '+d.faqs+' 类问题';
+      if(studio){ $('room').textContent=studio; ME.studio_name=studio; }
+      setStatus('设置已保存','ok');
+    }
   }catch(e){ m.className='msg err'; m.textContent='网络错误'; }
   btn.textContent='保存设置'; btn.disabled=false;
 }
@@ -327,12 +368,53 @@ async function saveRoom(){
   const rid=$('roomInput').value.trim();
   const m=$('roommsg');
   if(!rid){ m.className='msg err'; m.textContent='请填直播间号'; return; }
+  m.className='msg'; m.textContent='';
   try{
     const r=await fetch('/api/room',{method:'POST',headers:h({'Content-Type':'application/json'}),body:JSON.stringify({room_id:rid})});
     const d=await r.json();
-    if(!r.ok||!d.ok){ m.className='msg err'; m.textContent=d.error||'保存失败'; }
-    else{ m.className='msg ok'; m.textContent=d.pump_started?'已连接弹幕':'直播间号已保存'; }
+    if(!r.ok||!d.ok){ m.className='msg err'; m.textContent=d.error||'保存失败'; return; }
+    ME.room_id=d.room_id;
+    m.className='msg ok';
+    m.textContent='直播间号已保存，正在连接弹幕…';
+    setStatus('直播间号 '+d.room_id+' · 正在连接弹幕…','ok');
+    if(!ME.kb_filled) setTimeout(()=>showTab('set'),900);
   }catch(e){ m.className='msg err'; m.textContent='网络错误'; }
+}
+
+/* ---------- 数据大盘 ---------- */
+function bar(pct,color){
+  pct=Math.max(0,Math.min(100,pct||0));
+  return `<div style="background:#23272f;border-radius:6px;height:9px;overflow:hidden;margin-top:5px"><div style="width:${pct}%;height:100%;background:${color}"></div></div>`;
+}
+
+async function loadReport(){
+  try{
+    const r=await fetch('/api/report',{headers:h()});
+    if(!r.ok){ $('repHead').innerHTML='<div class="empty">读取失败</div>'; return; }
+    const a=await r.json();
+    if(a.empty){ $('repHead').innerHTML='<div class="empty">本场还没有数据</div>'; $('repGaps').innerHTML='<div class="empty">暂无</div>'; $('repHot').innerHTML='<div class="empty">暂无</div>'; return; }
+    const c=a.counts, cov=a.coverage;
+    $('repHead').innerHTML=`
+      <div style="font-size:40px;font-weight:700;color:var(--accent);line-height:1.1">${cov.ai_rate_pct}%</div>
+      <div style="font-size:12.5px;color:var(--dim);margin-bottom:8px">AI 承接率 · 需回应 ${cov.needs_reply} 条，AI 答了 ${cov.ai_answered} 条</div>
+      ${bar(cov.ai_rate_pct,'var(--accent)')}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:14px;font-size:13px">
+        <div>弹幕总数 <b>${c.total}</b></div>
+        <div>AI 出声 <b style="color:var(--accent)">${c.assist}</b></div>
+        <div>转给你 <b style="color:var(--warn)">${c.prompt}</b></div>
+        <div>灌水忽略 <b>${c.ignore}</b></div>
+        <div>礼物互动 <b>${c.social}</b></div>
+        <div>时长 <b>${a.duration_min}</b> 分钟</div>
+      </div>`;
+    const gaps=a.kb_gaps||[];
+    $('repGaps').innerHTML=gaps.length
+      ? gaps.map(g=>`<div class="assist-item"><span class="tag" style="color:var(--warn)">${g.count}次</span>${esc(g.text)}</div>`).join('')
+      : '<div class="empty">暂时没有，说明你填的资料够用</div>';
+    const hot=a.hot_questions||[];
+    $('repHot').innerHTML=hot.length
+      ? hot.map(q=>`<div class="assist-item"><span class="tag">${q.count}次</span>${esc(q.text)}</div>`).join('')
+      : '<div class="empty">暂无</div>';
+  }catch(e){ $('repHead').innerHTML='<div class="empty">网络错误</div>'; }
 }
 
 async function logout(){
@@ -345,7 +427,7 @@ async function bootstrap(){
     const r=await fetch('/api/me',{headers:h()});
     if(r.status===401||r.status===403){ location.href='/login'; return; }
     const me=await r.json();
-    authed=true;
+    ME=me; authed=true;
     $('room').textContent=`${me.studio_name||'AI 助播台'}`;
     $('roomInput').value=me.room_id||'';
     $('acctInfo').textContent=`账号：${me.username}`;
@@ -354,7 +436,8 @@ async function bootstrap(){
       showTab('set');
     }
     if(!me.room_id) setStatus('请先填直播间号','bad');
-    else if(!me.kb_filled) setStatus('请先填设置','bad');
+    else if(!me.kb_filled) setStatus('直播间号 '+me.room_id+' 已保存 · 请先填写设置','bad');
+    else setStatus('直播间号 '+me.room_id+' 已保存 · 点「开始助播」','ok');
   }catch(e){}
 }
 bootstrap();

@@ -437,6 +437,10 @@ async def save_kb(request: Request, payload: dict) -> JSONResponse:
     if not room:
         return _deny(request)
     profile = kb_store.save(room.id, payload.get("profile") or {}) if "profile" in payload else room.profile
+    # 店名/助手名两处同源：账号里也存一份，首页顶部和登录后立刻一致
+    acct = accounts.get(room.id)
+    if acct is not None and profile.get("studio_name"):
+        accounts.update(room.id, studio_name=profile["studio_name"])
     # compile_faqs 只算数量，不重复 apply（kb_store.save 订阅回调已经把 apply 入队了）
     faqs = compile_faqs(profile)
 
