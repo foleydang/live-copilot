@@ -138,12 +138,21 @@ def _deny(request: Request) -> JSONResponse:
     return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
 
 
+def _ensure_room(username: str, rec: dict):
+    """拿到（必要时创建）某个账号对应的房间。重启后/老账号都能自愈。"""
+    room = registry.get(username)
+    if room:
+        return room
+    return registry.register_live(_meta_from_account(username, rec))
+
+
 def _resolve(request: Request):
     """登录 cookie → (tenant, room)。只有一条鉴权路径。"""
     meta = _session_tenant(request)
     if not meta:
         return None, None
-    return meta, registry.get(meta["id"])
+    rec = accounts.get(meta["id"]) or {}
+    return meta, _ensure_room(meta["id"], rec)
 
 
 def _session_tenant(req) -> dict | None:
@@ -234,9 +243,7 @@ async def api_login(request: Request, payload: dict) -> JSONResponse:
     if not rec:
         AUTH_FAILS.hit(f"{_client_ip(request)}:auth")
         return JSONResponse({"ok": False, "error": "用户名或密码不对"}, status_code=401)
-    meta = _tenant_by_id(rec.get("tenant_id") or username)
-    if not meta:
-        return JSONResponse({"ok": False, "error": "账号没有关联直播间，请联系管理员"}, status_code=500)
+    _ensure_room(username, rec)
     resp = JSONResponse({"ok": True, "username": username})
     _set_session(resp, username, request)
     return resp
