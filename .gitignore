@@ -1,12 +1,25 @@
+# ---- 密钥 / 凭据（绝不入库） ----
+.env
+.env.*
+tenants.yaml
+admin.yaml
+deploy/dashscope.conf
+deploy/*.conf
+
+# ---- 运行时数据 ----
+sessions/
+cache/
+kb/tenants/*/profile.json
+
+# ---- 二进制 / 构建产物 ----
 .venv/
 __pycache__/
 *.pyc
-sessions/
-cache/
-.env
-tenants.yaml
-admin.yaml
 bin/douyinLive
+
+# ---- 日志 ----
 logs/
 *.log
+
+# ---- 系统 ----
 .DS_Store
