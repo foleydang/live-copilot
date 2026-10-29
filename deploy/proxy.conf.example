@@ -1,0 +1,10 @@
+# nginx 免 token 通道（drop-in）
+# 部署到：/etc/systemd/system/live-copilot.service.d/proxy.conf
+# chmod 600
+#
+# LIVE_COPILOT_PROXY_TOKEN 需与 nginx 配置里的 X-Proxy-Token 一致。
+# 生成：openssl rand -base64 32 | tr -d '/+=' | cut -c1-43
+
+[Service]
+Environment=LIVE_COPILOT_PROXY_TOKEN=__REPLACE_ME__
+Environment=LIVE_COPILOT_PROXY_TENANT=__TENANT_ID__

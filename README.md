@@ -41,6 +41,15 @@ Live Copilot 替主播**自动语音回答**这些重复问题（价格/发货/�
 
 ## 快速开始
 
+### 直接打开（已部署）
+
+```
+https://live.yanten.top/
+```
+
+Basic Auth 登录一次，浏览器会记住；地址栏不需要带 token。
+旧的 `https://zhubo.yanten.top/` 仍可用。
+
 ### 本地调试（3 步）
 
 ```bash
@@ -87,6 +96,8 @@ sudo systemctl enable --now live-copilot
 | `LIVE_COPILOT_ADMIN_TOKEN` | — | 管理令牌 |
 | `HOST` | 127.0.0.1 | 绑地址；公网设 0.0.0.0，nginx 反代后改回 |
 | `PORT` | 8010 | 监听端口 |
+| `LIVE_COPILOT_PROXY_TOKEN` | — | nginx 注入的免 token 内部令牌 |
+| `LIVE_COPILOT_PROXY_TENANT` | — | 免 token 通道默认放行的租户 id |
 
 ## API 一览
 

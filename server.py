@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import os
 import re
@@ -63,6 +64,11 @@ registry = RoomRegistry(cfg, TENANTS, kb_store)
 
 # 鉴权失败限流：扫描器 20 次/分钟就封 2 分钟，避免日志被刷爆
 AUTH_FAILS = RateLimiter(max_hits=20, window_sec=60.0, block_sec=120.0)
+
+# nginx 反代注入的免 token 通道（配合 nginx basic auth 使用）。
+# 用途：店主自己测试时地址栏不用带 43 位 token；公网客户仍然用 ?t=<token>。
+PROXY_TOKEN = (os.environ.get("LIVE_COPILOT_PROXY_TOKEN") or "").strip()
+PROXY_TENANT = (os.environ.get("LIVE_COPILOT_PROXY_TENANT") or "").strip()
 
 # ---- 配置与启动 ----
 HOST = os.environ.get("HOST", "127.0.0.1")
@@ -131,10 +137,26 @@ def _resolve(request: Request):
     if not AUTH_ON:
         room = next(iter(registry.rooms.values()), None)
         return ({"id": "default", "name": cfg["room"]["name"], "room": ""}, room) if room else (None, None)
+    meta = _proxy_meta(request.headers)
+    if meta:
+        return meta, registry.get(meta["id"])
     tenant = verify(TENANTS, extract_token(request.headers, request.query_params))
     if not tenant:
         return None, None
     return tenant, registry.get(tenant["id"])
+
+
+def _proxy_meta(headers) -> dict | None:
+    """校验 nginx 注入的 X-Proxy-Token，命中则免 ?t= 直接放行默认租户。"""
+    if not PROXY_TOKEN:
+        return None
+    got = (headers.get("x-proxy-token") or "").strip()
+    if not got or not hmac.compare_digest(got, PROXY_TOKEN):
+        return None
+    for meta in TENANTS.values():
+        if meta["id"] == PROXY_TENANT:
+            return meta
+    return next(iter(TENANTS.values()), None)
 
 
 def _admin_header_token(request: Request) -> str | None:
@@ -192,7 +214,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
     token = ws.query_params.get("t") or ws.query_params.get("token")
     ip = _client_ip(ws)
     if AUTH_ON:
-        tenant = verify(TENANTS, token)
+        tenant = _proxy_meta(ws.headers) or verify(TENANTS, token)
         if not tenant:
             if AUTH_FAILS.hit(f"{ip}:auth"):
                 print(f"[auth] IP {ip} 触发鉴权限流")

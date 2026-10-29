@@ -1,5 +1,17 @@
 # 安全部署清单
 
+## 当前访问方式
+
+```
+https://live.yanten.top/          ← 主入口（Basic Auth + 免 URL token）
+https://zhubo.yanten.top/         ← 旧别名，同一套配置
+http://47.111.181.116:8010/?t=…   ← 仅内网/临时调试（公网建议关掉）
+```
+
+- **Basic Auth**：用户名 `foley`，密码见部署时生成（浏览器记住一次即可）
+- **免 URL token**：nginx 注入 `X-Proxy-Token`，服务端据此放行默认租户
+- **客户链接**：仍然用 `?t=<token>`，与上面的测试通道并存
+
 ## 现状（已实现）
 
 - ✅ 多租户 token 鉴权（`secrets.token_urlsafe(24)` ≈ 144 bit 熵）
@@ -9,113 +21,81 @@
 - ✅ 留痕路径防穿越（`[^A-Za-z0-9_.-]` 过滤 + `.`/`..` 拒绝）
 - ✅ HTML/API 响应 `Cache-Control: no-store`
 - ✅ 前端 `history.replaceState` 抹掉 URL token
-- ✅ systemd 加固：`NoNewPrivileges / PrivateTmp / ProtectSystem / ProtectHome / ReadWritePaths`
+- ✅ HTTPS（Let's Encrypt，`live.yanten.top` + `zhubo.yanten.top`，自动续期）
+- ✅ nginx Basic Auth + nginx 注入内部令牌（`X-Proxy-Token`，客户端同名头会被覆盖）
+- ✅ systemd 加固：`NoNewPrivileges / PrivateTmp / ProtectSystem / ReadWritePaths`
 - ✅ 日志轮转（logrotate 每天 + 50MB 上限）
 - ✅ TTS 缓存 / 留痕 6h 自动清理
 
-## 上线前必做（客户上线前必须完成）
+## 相关文件
 
-### 1. HTTPS + 反向代理（当前最大风险）
+| 文件 | 权限 | 说明 |
+|---|---|---|
+| `/etc/aa_nginx/conf.d/live-copilot.conf` | 644 | 站点配置（含内部令牌） |
+| `/etc/aa_nginx/.htpasswd_live` | 640 root:nginx | Basic Auth 密码 |
+| `/etc/systemd/system/live-copilot.service.d/proxy.conf` | 600 | 内部令牌 + 默认租户 |
+| `/etc/systemd/system/live-copilot.service.d/dashscope.conf` | 600 | DashScope API Key |
+| `/root/github/live-copilot/tenants.yaml` | 600 | 客户 token |
+| `/root/github/live-copilot/admin.yaml` | 600 | 管理 token |
 
-**当前 8010 直连公网 HTTP**，token 在网络上明文传输，扫描器已经在探了。
+## 上线前必做
 
-最小修复（用现有 `yanten.top` 域名）：
-
-```nginx
-# /etc/nginx/conf.d/zhubo.conf
-server {
-    listen 443 ssl;
-    server_name zhubo.yanten.top;
-    ssl_certificate     /etc/letsencrypt/live/yanten.top/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/yanten.top/privkey.pem;
-
-    location / {
-        proxy_pass http://127.0.0.1:8010;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        # WebSocket
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_read_timeout 3600s;
-    }
-}
-```
-
-然后：
-
-```bash
-# 加 DNS A 记录 zhubo.yanten.top → 服务器 IP
-certbot --nginx -d zhubo.yanten.top
-# 改 systemd
-systemctl edit live-copilot
-# 在 [Service] 段加：
-Environment=HOST=127.0.0.1
-systemctl restart live-copilot
-```
-
-### 2. 阿里云安全组
-
-入站规则只保留必要端口：
+### 1. 阿里云安全组
 
 | 端口 | 来源 | 用途 |
 |---|---|---|
 | 22 | 仅你的固定 IP | SSH |
 | 80 | 任意 | HTTP → 301 到 HTTPS |
 | 443 | 任意 | HTTPS |
-| 8010 | **删除** | 已被 nginx 接管 |
+| 8010 | **删除** | 已由 nginx 接管，不要直连公网 |
+
+改完 systemd：`Environment=HOST=127.0.0.1`，`systemctl restart live-copilot`。
+
+### 2. 改 Basic Auth 密码
+
+```bash
+# 生成新密码并写入
+openssl passwd -apr1 '你的新密码' | sed 's/^/foley:/' > /etc/aa_nginx/.htpasswd_live
+chown root:nginx /etc/aa_nginx/.htpasswd_live && chmod 640 /etc/aa_nginx/.htpasswd_live
+nginx -s reload
+```
 
 ### 3. 客户 token 管理 SOP
 
-- 每个客户发一个**短链接**（`zhubo.yanten.top/?t=<token>`），客户扫码即开
-- 定期（每月）调 `/api/admin/rotate/{id}` 换一次 token
-- 客户离职 / 合约结束 → `/api/admin/tenants DELETE`
-- **绝不在群里贴完整 URL**，截图会泄露 token
+- 每个客户发一条 `https://live.yanten.top/?t=<token>`
+- 每月调 `/api/admin/rotate/{id}` 换一次
+- 合约结束 → `DELETE /api/admin/tenants/{id}`
+- 绝不在群里贴完整 URL
 
-### 4. 敏感文件权限
-
-```bash
-# 已经是 600，复查：
-ls -l /root/github/live-copilot/tenants.yaml /root/github/live-copilot/admin.yaml /etc/systemd/system/live-copilot.service.d/dashscope.conf
-```
-
-## 商业化前必做
-
-### 5. 非 root 运行
+### 4. 非 root 运行（商业化前）
 
 ```bash
-sudo useradd -r -s /sbin/nologin aizhubo
-sudo chown -R aizhubo:aizhubo /root/github/live-copilot
-sudo systemctl edit live-copilot
-# [Service]
-User=aizhubo
-Group=aizhubo
-sudo systemctl restart live-copilot
+sudo useradd -r -s /sbin/nologin copilot
+sudo chown -R copilot:copilot /root/github/live-copilot   # 或迁到 /opt
+sudo systemctl edit live-copilot   # User=copilot / Group=copilot
 ```
 
-### 6. 租户配额
+> 迁到 `/opt/live-copilot` 更规范，但 `ProtectHome` 需要恢复为 `true`。
 
-当前所有租户共用一把 DashScope key，**一个客户能烧光所有额度**。需要：
+### 5. 租户配额
 
-- 每租户 LLM token 月度上限（如 100 万 tokens）
-- 到达 80% 时给店主手机推告警
-- 到达 100% 时降级到本地规则 + 通知运营
+所有租户共用一把 DashScope key，**一个客户能烧光所有额度**。需要：
 
-`src/usage.py` 已经埋好计量点（`llm.prompt_tokens` / `completion_tokens` / `tts_chars`），接一个配额模块即可。
+- 每租户月度 token 上限（如 100 万）
+- 80% 推告警、100% 降级到本地规则
+- 计量点已埋好：`/api/usage` 的 `llm.prompt_tokens` / `completion_tokens` / `tts.chars`
 
-### 7. 监控告警
+### 6. 监控
 
-接一个外部健康检查（UptimeRobot / 阿里云云监控）定时打 `/api/health`，`ok:false` 时报警。
+外部探针定时打 `https://live.yanten.top/api/health`（带 Basic Auth），`ok:false` 报警。
 
 ## 应急 SOP
 
 | 现象 | 处置 |
 |---|---|
-| AI 说了违规话 | H5 上点「🔇 静音」，立刻生效；客户群里道歉 |
-| token 泄露 | 调 `/api/admin/rotate/{id}`，所有 H5 自动失效，重发新链接 |
-| 服务挂了 | `systemctl status live-copilot` + `journalctl -u live-copilot -n 100` |
-| 日志刷屏 | 检查 `/var/log/live-copilot.log`；限流已经能挡扫描器 |
-| 磁盘满 | 维护线程每 6h 清理一次；手动：`du -sh /root/github/live-copilot/cache /root/github/live-copilot/sessions` |
+| AI 说了违规话 | H5 点「🔇 静音」，立刻生效 |
+| token 泄露 | `/api/admin/rotate/{id}`，H5 自动失效，重发链接 |
+| Basic Auth 泄露 | 改 `.htpasswd_live` + `nginx -s reload` |
+| 内部令牌泄露 | 改 `proxy.conf` 的 `LIVE_COPILOT_PROXY_TOKEN` + 重跑 `gen_nginx` + 重启服务 |
+| 服务挂了 | `systemctl status live-copilot` / `journalctl -u live-copilot -n 100` |
+| 磁盘满 | `du -sh cache sessions`；维护线程每 6h 清理 |
