@@ -1,0 +1,22 @@
+[Unit]
+Description=douyinLive - Douyin live danmaku collector (local ws on 1088)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/github/live-copilot
+ExecStart=/root/github/live-copilot/bin/douyinLive
+Restart=always
+RestartSec=10
+
+# 采集器是纯转发，内存占用小；同样排在关键服务之后被杀
+MemoryMax=300M
+OOMScoreAdjust=300
+
+StandardOutput=append:/var/log/douyinlive.log
+StandardError=append:/var/log/douyinlive.log
+
+[Install]
+WantedBy=multi-user.target

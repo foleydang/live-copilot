@@ -1,0 +1,4 @@
+-r requirements.txt
+numpy>=1.26
+sounddevice>=0.4.6   # 仅本地调试模式 run.py --audio 用
+pytest>=7.0

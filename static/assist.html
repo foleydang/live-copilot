@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>AI 助播台</title>
+<style>
+  :root { --bg:#0f1115; --card:#1a1d24; --accent:#4ade80; --warn:#fbbf24; --text:#e5e7eb; --dim:#9ca3af; --line:#262a33; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }
+  header { padding:10px 14px; border-bottom:1px solid var(--line); position:sticky; top:0;
+           background:var(--bg); z-index:9; }
+  .hrow { display:flex; align-items:center; gap:9px; }
+  h1 { font-size:16px; margin:0; font-weight:600; }
+  .dot { width:9px; height:9px; border-radius:50%; background:#ef4444; flex:0 0 auto; }
+  .dot.on { background:var(--accent); box-shadow:0 0 7px var(--accent); }
+  .stats { margin-left:auto; font-size:11px; color:var(--dim); text-align:right; line-height:1.45; }
+  .tabs { display:flex; gap:7px; margin-top:9px; }
+  .tab { flex:1; padding:9px; text-align:center; border-radius:9px; background:#1f232b;
+         font-size:14px; font-weight:600; color:var(--dim); border:1px solid transparent; }
+  .tab.on { color:#06281a; background:var(--accent); }
+  .status { font-size:12px; color:var(--dim); margin-top:8px; padding:7px 10px;
+            background:#151821; border-radius:8px; border-left:3px solid var(--line); }
+  .status.ok { border-left-color:var(--accent); color:#bbf7d0; }
+  .status.bad { border-left-color:#ef4444; color:#fecaca; }
+  main { padding:12px 14px 96px; }
+  section { background:var(--card); border-radius:13px; padding:13px; margin-bottom:13px; }
+  h2 { font-size:12.5px; margin:0 0 9px; color:var(--dim); font-weight:600; letter-spacing:.4px; }
+  .empty { color:#4b5563; font-size:13.5px; padding:6px 0; }
+  .prompt-item { border-left:4px solid var(--warn); padding:9px 11px; margin-bottom:9px;
+                 background:#20242c; border-radius:0 9px 9px 0; animation:in .3s ease; }
+  .prompt-item .who { font-size:11px; color:var(--warn); margin-bottom:3px; }
+  .prompt-item .what { font-size:21px; line-height:1.3; font-weight:600; }
+  .prompt-item.stale { opacity:.42; }
+  .assist-item { font-size:14px; line-height:1.45; padding:6px 0; border-bottom:1px solid #23272f;
+                 color:#d1d5db; animation:in .3s ease; }
+  .assist-item:last-child { border-bottom:none; }
+  .assist-item .tag { color:var(--accent); font-size:11px; margin-right:5px; }
+  @keyframes in { from{opacity:0;transform:translateY(-5px)} to{opacity:1;transform:none} }
+  .bar { position:fixed; left:0; right:0; bottom:0; padding:10px 14px calc(10px + env(safe-area-inset-bottom));
+         background:linear-gradient(transparent, var(--bg) 30%); display:flex; gap:9px; z-index:8; }
+  button { padding:13px; border:none; border-radius:11px; font-size:15px; font-weight:600;
+           background:#2b303b; color:var(--text); cursor:pointer; }
+  button.primary { flex:1; background:var(--accent); color:#06281a; }
+  button.side { flex:0 0 104px; }
+  button:active { transform:scale(.98); }
+  button.mini { padding:8px 12px; font-size:13px; border-radius:9px; }
+  /* 设置页表单 */
+  label { display:block; font-size:13px; color:#cbd5e1; margin:11px 0 5px; font-weight:600; }
+  label:first-child { margin-top:0; }
+  .hint { font-size:11.5px; color:#6b7280; margin:-3px 0 5px; line-height:1.5; }
+  input, textarea { width:100%; padding:11px; border-radius:9px; border:1px solid #2b303b;
+                    background:#12151b; color:var(--text); font-size:15px; font-family:inherit; }
+  textarea { min-height:66px; resize:vertical; line-height:1.5; }
+  input:focus, textarea:focus { outline:none; border-color:var(--accent); }
+  .rowlist > div { display:flex; gap:7px; margin-bottom:7px; align-items:center; }
+  .rowlist input { flex:1; }
+  .del { flex:0 0 40px; padding:11px 0; text-align:center; background:#3a2020; color:#fca5a5;
+         border-radius:9px; font-size:15px; }
+  .save { width:100%; padding:15px; font-size:16px; background:var(--accent); color:#06281a;
+          border-radius:12px; font-weight:700; margin-top:6px; }
+  .msg { font-size:13px; padding:10px 12px; border-radius:9px; margin-top:10px; line-height:1.6; display:none; }
+  .msg.ok { display:block; background:rgba(74,222,128,.13); color:#bbf7d0; }
+  .msg.err { display:block; background:rgba(239,68,68,.13); color:#fecaca; }
+  .hide { display:none; }
+</style>
+</head>
+<body>
+<header>
+  <div class="hrow">
+    <span class="dot" id="dot"></span>
+    <h1 id="room">AI 助播台</h1>
+    <div class="stats" id="stats">未连接</div>
+  </div>
+  <div class="tabs">
+    <div class="tab on" id="tabLive" onclick="showTab('live')">助播台</div>
+    <div class="tab" id="tabSet" onclick="showTab('set')">设置</div>
+    <div class="tab" id="tabRep" onclick="showTab('rep')">复盘</div>
+  </div>
+  <div class="status" id="status">未连接</div>
+</header>
+
+<main>
+  <!-- ============ 助播台 ============ -->
+  <div id="paneLive">
+    <section>
+      <h2>📋 需要你亲自回应的（扫一眼就行）</h2>
+      <div id="prompts"><div class="empty">暂无</div></div>
+      <div class="hint">定制、批发、砍价、复杂工艺、以及 AI 拿不准的问题会出现在这里。AI 不会替你回答这些。</div>
+    </section>
+    <section>
+      <h2>🔊 AI 已经替你回答的（观众听到了）</h2>
+      <div id="assists"><div class="empty">暂无</div></div>
+    </section>
+    <section>
+      <h2>🧪 试一句话</h2>
+      <div style="display:flex;gap:7px">
+        <input id="fake" placeholder="比如：这个壶多少钱" style="flex:1">
+        <button class="mini" onclick="pushFake()">发送</button>
+      </div>
+      <div class="hint">用来检查 AI 答得对不对。正式直播时弹幕自动进来，不用管这里。</div>
+    </section>
+  </div>
+
+  <!-- ============ 设置 ============ -->
+  <div id="paneSet" class="hide">
+    <section>
+      <h2>① 直播间号（必填，AI 靠它读弹幕）</h2>
+      <label>抖音直播间号</label>
+      <input id="k_room" inputmode="numeric" placeholder="例如 516466932480">
+      <div class="hint">怎么找：电脑打开你的抖音直播间，网址 live.douyin.com/ 后面那串数字就是。<br>
+        填完点最下面的「保存并生效」，AI 会自动开始读弹幕，不用重启。</div>
+    </section>
+
+    <section>
+      <h2>② AI 助手叫什么</h2>
+      <label>助手名字</label>
+      <input id="k_assistant" placeholder="小陶">
+      <label>你的店/工作室名</label>
+      <input id="k_studio" placeholder="例如 建水紫陶·老王工作室">
+    </section>
+
+    <section>
+      <h2>③ 常见问题（AI 会照着答）</h2>
+      <label>有人进来时说什么</label>
+      <textarea id="k_greeting" placeholder="欢迎新进来的朋友，主播正在手工拉坯，有问题尽管打在公屏上～"></textarea>
+      <label>发货怎么发</label>
+      <textarea id="k_shipping" placeholder="拍下后48小时内发货，韵达或顺丰，包装会加固"></textarea>
+      <label>能不能定制</label>
+      <textarea id="k_custom" placeholder="支持定制刻字，周期15天左右，具体加主播微信聊"></textarea>
+      <label>AI 答不上来时说什么</label>
+      <textarea id="k_fallback" placeholder="这个我请主播来讲，稍等一下哈～"></textarea>
+    </section>
+
+    <section>
+      <h2>④ 商品和价格（一行一个）</h2>
+      <div class="rowlist" id="k_products"></div>
+      <button class="mini" onclick="addRow('k_products','名称','价格')">＋ 加一个商品</button>
+      <div class="hint">价格可以不填，AI 会引导观众看小黄车。填了 AI 就能直接报价。</div>
+    </section>
+
+    <section>
+      <h2>⑤ 观众常问的手艺问题</h2>
+      <div class="rowlist" id="k_craft"></div>
+      <button class="mini" onclick="addRow('k_craft','问题','怎么回答')">＋ 加一条问答</button>
+      <div class="hint">例如 问「这个要烧几天」答「进窑要烧好几天，出窑有惊喜也有遗憾」</div>
+    </section>
+
+    <section>
+      <h2>⑥ 本店规矩（AI 会遵守）</h2>
+      <textarea id="k_rules" placeholder="一行一条，例如：&#10;不议价，价格都是实价&#10;不私下交易，只走小黄车&#10;不承诺具体升值空间"></textarea>
+    </section>
+
+    <button class="save" onclick="saveKb()">保存并生效</button>
+    <div class="msg" id="kbmsg"></div>
+  </div>
+
+  <!-- ============ 复盘 ============ -->
+  <div id="paneRep" class="hide">
+    <section>
+      <h2>📊 本场 AI 干了多少活</h2>
+      <div id="repHead"><div class="empty">加载中…</div></div>
+    </section>
+    <section>
+      <h2>⚠️ 知识库缺口（AI 答不上来、转给你的问题）</h2>
+      <div id="repGaps"><div class="empty">加载中…</div></div>
+      <div class="hint">同一类问题被问 2 次以上就会列在这里。把它们补进「设置」页，下次 AI 就能自己答了。</div>
+    </section>
+    <section>
+      <h2>🔥 高频问题</h2>
+      <div id="repHot"><div class="empty">加载中…</div></div>
+    </section>
+    <section>
+      <h2>🕐 观众在问什么 · 时段分布</h2>
+      <div id="repIntents"><div class="empty">加载中…</div></div>
+    </section>
+    <button class="save" onclick="loadReport()">刷新复盘</button>
+  </div>
+</main>
+
+<div class="bar">
+  <button class="primary" id="startBtn" onclick="start()">开始助播</button>
+  <button class="side" id="muteBtn" onclick="toggleMute()">🔇 静音</button>
+  <button class="side" onclick="announce()">念AI声明</button>
+</div>
+<style>
+#muteBtn.on { background:#7f1d1d; color:#fecaca; }
+</style>
+
+<audio id="player"></audio>
+
+<script>
+let ws=null, started=false, prompts=[], assists=[], room_id='';
+const $=id=>document.getElementById(id);
+const TOKEN=new URLSearchParams(location.search).get('t')||localStorage.getItem('lc_token')||'';
+if(new URLSearchParams(location.search).get('t')) {
+  localStorage.setItem('lc_token',TOKEN);
+  // 抹掉 URL 里的 token：截图/投屏/浏览器历史都不会再泄露
+  try { history.replaceState({},'',location.pathname); } catch(e){}
+}
+const h=x=>Object.assign({'X-Token':TOKEN},x||{});
+const esc=t=>String(t??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function showTab(t){
+  $('paneLive').classList.toggle('hide',t!=='live');
+  $('paneSet').classList.toggle('hide',t!=='set');
+  $('paneRep').classList.toggle('hide',t!=='rep');
+  $('tabLive').classList.toggle('on',t==='live');
+  $('tabSet').classList.toggle('on',t==='set');
+  $('tabRep').classList.toggle('on',t==='rep');
+  if(t==='set') loadKb();
+  if(t==='rep') loadReport();
+}
+
+/* ---------- 复盘 ---------- */
+function bar(pct, color){
+  pct = Math.max(0, Math.min(100, pct||0));
+  return `<div style="background:#23272f;border-radius:6px;height:9px;overflow:hidden;margin-top:5px">
+    <div style="width:${pct}%;height:100%;background:${color}"></div></div>`;
+}
+async function loadReport(){
+  try{
+    const r = await fetch('/api/report',{headers:h()});
+    if(!r.ok){ $('repHead').innerHTML='<div class="empty">读取失败 HTTP '+r.status+'</div>'; return; }
+    const a = await r.json();
+    if(a.empty){ $('repHead').innerHTML='<div class="empty">本场还没有数据</div>'; return; }
+    const c=a.counts, cov=a.coverage, lat=a.latency_ms;
+    $('repHead').innerHTML = `
+      <div style="font-size:34px;font-weight:700;color:var(--accent);line-height:1.1">${cov.ai_rate_pct}%</div>
+      <div style="font-size:12px;color:var(--dim);margin-bottom:10px">AI 承接率 ·  AI 答了 ${cov.ai_answered} 条 / 需回应 ${cov.needs_reply} 条</div>
+      ${bar(cov.ai_rate_pct,'var(--accent)')}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;font-size:12.5px">
+        <div>弹幕总数 <b>${c.total}</b></div>
+        <div>文字弹幕 <b>${c.chat}</b></div>
+        <div>AI 出声 <b style="color:var(--accent)">${c.assist}</b></div>
+        <div>转主播 <b style="color:var(--warn)">${c.prompt}</b></div>
+        <div>灌水忽略 <b>${c.ignore}</b>（${cov.noise_rate_pct}%）</div>
+        <div>违禁拦截 <b>${c.guard_hit}</b></div>
+        <div>礼物/关注/点赞 <b>${c.social}</b></div>
+        <div>时长 <b>${a.duration_min}</b> 分钟</div>
+      </div>
+      <div style="margin-top:11px;padding-top:10px;border-top:1px solid #23272f;font-size:12.5px">
+        决策延迟 中位 <b>${lat.llm_median}ms</b> · P90 <b>${lat.llm_p90}ms</b> · 最慢 ${lat.llm_max}ms
+        <div style="color:var(--dim);font-size:11.5px;margin-top:3px">来源 ${JSON.stringify(a.via)}（llm=大模型判断，rules=本地规则兜底）</div>
+      </div>`;
+    const gaps=a.kb_gaps||[];
+    $('repGaps').innerHTML = gaps.length
+      ? gaps.map(g=>`<div class="assist-item"><span class="tag" style="color:var(--warn)">${g.count}次</span>${esc(g.text)}</div>`).join('')
+        + `<div class="hint">共 ${a.kb_gap_total} 类未覆盖问题</div>`
+      : '<div class="empty">目前没有重复出现的未覆盖问题，知识库挺全</div>';
+    const hot=a.hot_questions||[];
+    $('repHot').innerHTML = hot.length
+      ? hot.map(q=>`<div class="assist-item"><span class="tag">${q.count}次</span>${esc(q.text)}</div>`).join('')
+      : '<div class="empty">暂无</div>';
+    const intents=a.intents||{};
+    const total=Object.values(intents).reduce((x,y)=>x+y,0)||1;
+    const zh={price:'价格',shipping:'发货',product:'商品',craft:'工艺',custom:'定制',cooperation:'批发合作',
+              greeting:'打招呼',interaction:'互动',noise:'灌水',other:'其他',
+              gift:'礼物',follow:'关注',like:'点赞',enter:'进场'};
+    $('repIntents').innerHTML = Object.entries(intents).map(([k,v])=>
+      `<div style="margin-bottom:8px"><div style="display:flex;justify-content:space-between;font-size:12.5px">
+        <span>${zh[k]||k}</span><span style="color:var(--dim)">${v} · ${Math.round(v*100/total)}%</span></div>
+        ${bar(v*100/total,'#818cf8')}</div>`).join('') || '<div class="empty">暂无</div>';
+  }catch(e){ $('repHead').innerHTML='<div class="empty">网络错误：'+esc(e.message)+'</div>'; }
+}
+
+function setStatus(text,cls){ const s=$('status'); s.textContent=text; s.className='status'+(cls?' '+cls:''); }
+
+function connect(delay){
+  const proto=location.protocol==='https:'?'wss':'ws';
+  ws=new WebSocket(`${proto}://${location.host}/ws?t=${encodeURIComponent(TOKEN)}`);
+  ws.onopen=()=>{ $('dot').classList.add('on'); setStatus('已连接云端，等待弹幕…','ok'); };
+  ws.onclose=e=>{
+    $('dot').classList.remove('on');
+    if(e.code===4401){ setStatus('链接不对，请用带 ?t= 的完整链接打开','bad'); return; }
+    const d=delay||2; setStatus(`连接断开，${d} 秒后重连…`,'bad');
+    setTimeout(()=>connect(Math.min((d||2)*2, 30)), (d||2)*1000);
+  };
+  ws.onmessage=e=>handle(JSON.parse(e.data));
+}
+
+function handle(m){
+  if(m.type==='hello'){
+    $('room').textContent=`${m.room} · AI助播台`;
+    room_id=m.room_id_set?'已填':'未填';
+    prompts=(m.pending||[]).map(p=>({...p,at:Date.now()}));
+    renderStats(m.stats); render();
+    const mb=$('muteBtn');
+    if(m.muted){ mb.classList.add('on'); mb.textContent='🔇 已静音'; }
+    if(m.kb_filled) setStatus(`已连接 · 直播间号${room_id} · ${m.connected?'弹幕采集中':'未连采集端'} · AI助手「${m.assistant_name}」`+(m.assist_voice?'':' · 本平台AI不出声，只提词'),'ok');
+    else { setStatus('还没填资料，AI 现在只能靠猜。请先到「设置」页填一下 →','bad'); showTab('set'); }
+    return;
+  }
+  if(m.type==='status'){
+    const live=m.live;
+    setStatus(live===true?`直播间已开播，正在读弹幕（${m.room||''}）`
+      :(m.text||'直播间状态：'+(m.code||'未知')), live===true?'ok':'bad');
+    return;
+  }
+  if(m.type==='prompt'){ prompts.unshift({text:m.text,at:Date.now()}); prompts=prompts.slice(0,12); render(); return; }
+  if(m.type==='audio'){ assists.unshift({text:m.text,at:Date.now()}); assists=assists.slice(0,30); render(); speak(m.text,m.audio); }
+}
+
+/* ---- 音频队列：多条弹幕排队说，不打断前一条 ---- */
+const audioQ=[];
+let speaking=false;
+function speak(text,b64){
+  audioQ.push({text,b64});
+  if(!speaking) playNext();
+}
+function playNext(){
+  if(!audioQ.length){ speaking=false; return; }
+  speaking=true;
+  const {text,b64}=audioQ.shift();
+  const p=$('player');
+  if(b64){
+    p.src='data:audio/wav;base64,'+b64;
+    p.onended=()=>playNext();
+    p.play().catch(()=>{
+      const u=new SpeechSynthesisUtterance(text); u.lang='zh-CN';
+      u.onend=()=>playNext();
+      speechSynthesis.cancel(); speechSynthesis.speak(u);
+    });
+  } else {
+    if(!('speechSynthesis' in window)){ playNext(); return; }
+    const u=new SpeechSynthesisUtterance(text); u.lang='zh-CN'; u.rate=1.05;
+    u.onend=()=>playNext();
+    speechSynthesis.cancel(); speechSynthesis.speak(u);
+  }
+}
+async function toggleMute(){
+  const btn=$('muteBtn'); btn.disabled=true;
+  const want= !btn.classList.contains('on');
+  try{
+    const r=await fetch('/api/mute',{method:'POST',headers:h({'Content-Type':'application/json'}),
+      body:JSON.stringify({muted:want})});
+    const d=await r.json();
+    if(d.ok){ btn.classList.toggle('on',d.muted); btn.textContent=d.muted?'🔇 已静音':'🔊 取消静音'; }
+  }catch(e){}
+  btn.disabled=false;
+}
+
+function render(){
+  const now=Date.now();
+  $('prompts').innerHTML=prompts.length?prompts.map(p=>{
+    const stale=(now-(p.at||0))/1000>180?' stale':'';
+    const who=p.user?`<div class="who">${esc(p.user)}</div>`:'';
+    return `<div class="prompt-item${stale}">${who}<div class="what">${esc(p.text)}</div></div>`;
+  }).join(''):'<div class="empty">暂无</div>';
+  $('assists').innerHTML=assists.length?assists.map(a=>`<div class="assist-item"><span class="tag">AI</span>${esc(a.text)}</div>`).join(''):'<div class="empty">暂无</div>';
+}
+function renderStats(s){ if(s) $('stats').innerHTML=`弹幕 ${s.danmaku} · AI答 ${s.assist}<br>转你 ${s.prompt} · 拦截 ${s.guard_hit}`; }
+
+async function start(){
+  if(started) return;
+  if(!TOKEN){ setStatus('缺少访问令牌，请用完整链接打开','bad'); return; }
+  started=true; $('startBtn').textContent='助播中';
+  const p=$('player'); p.src='data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=';
+  await p.play().catch(()=>{});
+  if('speechSynthesis' in window) speechSynthesis.resume();
+  if('wakeLock' in navigator){ try{ await navigator.wakeLock.request('screen'); }catch(e){} }
+  connect();
+  setInterval(()=>{ render(); fetch('/api/stats',{headers:h()}).then(r=>r.json()).then(d=>renderStats(d.stats)).catch(()=>{}); },3000);
+}
+async function announce(){ await fetch('/api/announce',{method:'POST',headers:h()}); }
+async function pushFake(){
+  const t=$('fake').value.trim(); if(!t) return;
+  await fetch('/api/danmaku',{method:'POST',headers:h({'Content-Type':'application/json'}),body:JSON.stringify({user:'我',text:t})});
+  $('fake').value='';
+}
+
+/* ---------- 设置页 ---------- */
+function addRow(boxId,ph1,ph2,val1,val2){
+  const box=$(boxId); const d=document.createElement('div');
+  d.innerHTML=`<input placeholder="${ph1}" value="${esc(val1||'')}"><input placeholder="${ph2}" value="${esc(val2||'')}"><span class="del" onclick="this.parentNode.remove()">✕</span>`;
+  box.appendChild(d);
+}
+function readRows(boxId){
+  return [...$(boxId).children].map(r=>{
+    const i=r.querySelectorAll('input');
+    return {name:(i[0]?.value||'').trim(), price:(i[1]?.value||'').trim(),
+            q:(i[0]?.value||'').trim(), a:(i[1]?.value||'').trim()};
+  }).filter(x=>x.name||x.q);
+}
+async function loadKb(){
+  try{
+    const r=await fetch('/api/kb',{headers:h()}); if(!r.ok) return;
+    const d=await r.json(); const p=d.profile||{};
+    $('k_room').value=d.room_id||'';
+    $('k_assistant').value=p.assistant_name||''; $('k_studio').value=p.studio_name||'';
+    $('k_greeting').value=p.greeting||''; $('k_shipping').value=p.shipping||'';
+    $('k_custom').value=p.custom||''; $('k_fallback').value=p.fallback||'';
+    $('k_rules').value=(p.rules||[]).join('\n');
+    $('k_products').innerHTML=''; (p.products||[]).forEach(x=>addRow('k_products','名称','价格',x.name,x.price));
+    $('k_craft').innerHTML=''; (p.craft_qa||[]).forEach(x=>addRow('k_craft','问题','怎么回答',x.q,x.a));
+  }catch(e){}
+}
+async function saveKb(){
+  const btn=event.target; btn.textContent='保存中…'; btn.disabled=true;
+  const profile={
+    assistant_name:$('k_assistant').value.trim()||'小陶',
+    studio_name:$('k_studio').value.trim(),
+    greeting:$('k_greeting').value.trim(), shipping:$('k_shipping').value.trim(),
+    custom:$('k_custom').value.trim(), fallback:$('k_fallback').value.trim(),
+    rules:$('k_rules').value.split('\n').map(s=>s.trim()).filter(Boolean),
+    products:readRows('k_products').map(x=>({name:x.name,price:x.price})),
+    craft_qa:readRows('k_craft').map(x=>({q:x.q,a:x.a}))
+  };
+  const m=$('kbmsg');
+  try{
+    const r=await fetch('/api/kb',{method:'POST',headers:h({'Content-Type':'application/json'}),
+      body:JSON.stringify({profile,room_id:$('k_room').value.trim()})});
+    const d=await r.json();
+    if(!r.ok||!d.ok){ m.className='msg err'; m.textContent='保存失败：'+(d.error||r.status); }
+    else{
+      m.className='msg ok';
+      let t=`已生效！AI 现在认识 ${d.faqs} 类问题，并预先合成了 ${d.prewarmed} 条语音（回答会更快、更省钱）。`;
+      if(d.room_id) t+= d.pump_started?` 直播间号已保存，正在连接弹幕…回到「助播台」看状态。`:` 直播间号已保存，但弹幕还没连上（可能服务未开采集）。`;
+      m.textContent=t;
+    }
+  }catch(e){ m.className='msg err'; m.textContent='网络错误：'+e.message; }
+  btn.textContent='保存并生效'; btn.disabled=false;
+}
+</script>
+</body>
+</html>

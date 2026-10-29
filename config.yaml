@@ -1,0 +1,60 @@
+# ============ AI 助播 POC 配置 ============
+# 架构：云端（阿里云）跑全部计算 → H5 助播端（闲置手机/平板）→ 直播声卡 → 直播手机
+# 主播的手机只负责正常开播，不装任何东西。
+
+source: ws
+# 抖音对接（douyinLive 独立服务）：ws://127.0.0.1:1088/ws/{直播间ID}
+#   直播间ID 取主播主页/直播间链接里的 web_rid 或 room_id
+# BarrageGrab：ws://127.0.0.1:8888
+ws_url: ws://127.0.0.1:1088/ws/在这里填你的直播间号
+
+# 社交消息（礼物/关注/点赞/进场）——双手忙碌的主播最没空做的就是这些
+social:
+  thank_gift: true          # 收到礼物立即感谢
+  thank_follow: true        # 收到关注立即感谢
+  thank_like_sec: 120       # 点赞聚合感谢间隔秒数，0=关闭
+  welcome_enter: false      # 进场欢迎（默认关，人多的时候会刷屏）
+  gift_debounce_sec: 5
+  follow_debounce_sec: 5
+  enter_debounce_sec: 20
+
+room:
+  name: 手工紫陶工作室
+  platform: douyin          # douyin | channels(视频号)
+
+output:
+  # AI 助播是否出声进直播流。
+  # 抖音：可以开（真人在场做真实劳动，AI 仅辅助答疑，配合 AI 声明与字幕标识）
+  # 视频号：建议关（平台把数字人/虚拟人直播整体归为"非真实直播"违规）
+  # 不填时按 platform 自动决定：douyin=true，channels=false
+  assist_voice: true
+
+llm:
+  enabled: true             # 无 key 时自动降级为本地关键词规则
+  base_url: https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+  api_key_env: DASHSCOPE_API_KEY
+  model: qwen3.6-flash
+  timeout: 8.0
+  max_tokens: 150
+  enable_thinking: false    # 实测 qwen3.8-flash 默认2209ms→关思考484ms
+
+tts:
+  engine: mock
+  api_key_env: DASHSCOPE_API_KEY
+  model: cosyvoice-v2
+  voice: longxiaochun       # 固定平台音色；禁止克隆主播声纹（合规红线）
+  assist_device: ""         # 仅本地调试模式（run.py --audio）用：虚拟声卡名关键字
+                            # mac 填 "BlackHole"，win 填 "CABLE Input"；云端部署留空
+  prompt_device: ""
+
+routing:
+  assist_debounce_sec: 25   # 同类问题 AI 助播最小重复间隔（防机械重复感）
+  prompt_dedupe_sec: 30     # 相同弹幕转提词的最小间隔
+  max_reply_len: 60
+
+disclosure:
+  enabled: true             # 服务启动自动口播 AI 声明（《标识办法》显式标识）
+  text: "本直播间由 AI 助手小陶协助回复常见问题，工艺讲解全部由主播本人完成，感谢理解～"
+
+log:
+  dir: sessions

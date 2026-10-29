@@ -1,0 +1,9 @@
+# 租户表：加一个客户 = 加一条记录，不用改代码
+# token 生成：python -c "from src.auth import new_token; print(new_token())"
+#
+# 注意：这个文件含密钥，不要提交到公开仓库（已加入 .gitignore）
+tenants:
+  - id: ztao-studio
+    name: 手工紫陶工作室
+    room: ""                 # 抖音直播间号，采集器用
+    token: REPLACE_WITH_GENERATED_TOKEN

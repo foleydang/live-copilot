@@ -1,0 +1,35 @@
+[Unit]
+Description=Live Copilot - AI co-host for live commerce (multi-tenant)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/github/live-copilot
+Environment=PORT=8010
+# 公网访问（建议配 nginx 反代 + HTTPS 后改回 127.0.0.1，更安全）
+Environment=HOST=0.0.0.0
+ExecStart=/root/github/live-copilot/.venv/bin/python /root/github/live-copilot/server.py
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=0
+# 本机 1904MB 内存，已有 yanten-api(PM2)、openclaw gateway(node.exe 572MB) 等常驻服务。
+# cgroup v1 实测只有 MemoryMax / OOMScoreAdjust 生效。
+# OOMScoreAdjust=300 让本服务在内存紧张时最先被杀，不牵连既有业务。
+MemoryMax=500M
+OOMScoreAdjust=300
+StandardOutput=append:/var/log/live-copilot.log
+StandardError=append:/var/log/live-copilot.log
+
+# ---- 安全加固 ----
+NoNewPrivileges=true
+PrivateTmp=true
+# ProtectSystem=full：/usr /boot /etc 只读；其余（含 /root）仍可写
+ProtectSystem=full
+# 代码仓在 /root/github 下，必须关掉 ProtectHome，否则进程读不到代码
+ProtectHome=false
+ReadWritePaths=/root/github/live-copilot /var/log
+
+[Install]
+WantedBy=multi-user.target

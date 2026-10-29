@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+sessions/
+cache/
+.env
+tenants.yaml
+admin.yaml
+bin/douyinLive
+logs/
+*.log
+.DS_Store
