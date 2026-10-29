@@ -52,7 +52,8 @@ def load_tenants(cfg: dict, tenants_file: "str | Path | None" = None) -> dict[st
 
 
 def auth_enabled(tenants: dict[str, dict]) -> bool:
-    return bool(tenants)
+    """始终启用登录系统（accounts 模块存在即多租户模式）。"""
+    return True
 
 
 def verify(tenants: dict[str, dict], token: str | None) -> dict | None:

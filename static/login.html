@@ -4,122 +4,94 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<title>登录 · AI 助播台</title>
+<title>AI 助播台</title>
 <style>
-  :root { --bg:#0f1115; --card:#1a1d24; --accent:#4ade80; --text:#e5e7eb; --dim:#9ca3af; --line:#262a33; }
-  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  :root { --bg:#0f1115; --card:#1a1d24; --accent:#4ade80; --text:#e5e7eb; --dim:#9ca3af; }
+  * { box-sizing:border-box; }
   body { margin:0; min-height:100vh; background:var(--bg); color:var(--text);
          font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
-         display:flex; align-items:center; justify-content:center; padding:24px 18px; }
-  .wrap { width:100%; max-width:380px; }
-  .brand { text-align:center; margin-bottom:22px; }
-  .brand h1 { font-size:22px; margin:0 0 6px; font-weight:700; }
-  .brand p { margin:0; font-size:13px; color:var(--dim); line-height:1.6; }
-  .card { background:var(--card); border-radius:16px; padding:18px; }
-  .tabs { display:flex; gap:8px; margin-bottom:16px; }
-  .tab { flex:1; padding:11px; text-align:center; border-radius:10px; background:#1f232b;
-         font-size:14.5px; font-weight:600; color:var(--dim); cursor:pointer; }
+         display:flex; align-items:center; justify-content:center; padding:20px; }
+  .wrap { width:100%; max-width:360px; }
+  .title { text-align:center; margin-bottom:24px; }
+  .title h1 { font-size:26px; margin:0 0 8px; font-weight:700; }
+  .title p { margin:0; font-size:15px; color:var(--dim); }
+  .card { background:var(--card); border-radius:16px; padding:24px 20px; }
+  .tabs { display:flex; gap:6px; margin-bottom:20px; }
+  .tab { flex:1; padding:12px; text-align:center; border-radius:10px;
+         background:#1f232b; font-size:15px; font-weight:600; color:var(--dim); cursor:pointer; }
   .tab.on { color:#06281a; background:var(--accent); }
-  label { display:block; font-size:13px; color:#cbd5e1; margin:12px 0 6px; font-weight:600; }
+  label { display:block; font-size:15px; font-weight:600; margin:16px 0 8px; }
   label:first-of-type { margin-top:0; }
-  input { width:100%; padding:13px; border-radius:10px; border:1px solid #2b303b;
-          background:#12151b; color:var(--text); font-size:16px; font-family:inherit; }
+  input { width:100%; padding:14px; border-radius:10px; border:1px solid #2b303b;
+          background:#12151b; color:var(--text); font-size:17px; font-family:inherit; }
   input:focus { outline:none; border-color:var(--accent); }
-  .hint { font-size:11.5px; color:#6b7280; margin-top:6px; line-height:1.55; }
-  button { width:100%; padding:15px; margin-top:18px; border:none; border-radius:12px;
-           font-size:16px; font-weight:700; background:var(--accent); color:#06281a; cursor:pointer; }
-  button:disabled { opacity:.6; }
-  .msg { font-size:13px; padding:10px 12px; border-radius:9px; margin-top:12px; line-height:1.6; display:none; }
-  .msg.ok { display:block; background:rgba(74,222,128,.13); color:#bbf7d0; }
-  .msg.err { display:block; background:rgba(239,68,68,.13); color:#fecaca; }
+  button { width:100%; padding:16px; margin-top:20px; border:none; border-radius:12px;
+           font-size:17px; font-weight:700; background:var(--accent); color:#06281a; cursor:pointer; }
+  button:disabled { opacity:.5; }
+  .msg { font-size:14px; padding:12px; border-radius:10px; margin-top:16px; display:none; text-align:center; }
+  .msg.ok { display:block; background:rgba(74,222,128,.15); color:#bbf7d0; }
+  .msg.err { display:block; background:rgba(239,68,68,.15); color:#fecaca; }
   .hide { display:none; }
-  .foot { text-align:center; font-size:11.5px; color:#4b5563; margin-top:16px; line-height:1.7; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="brand">
-    <h1>AI 助播台</h1>
-    <p>替你在直播间接住重复问答<br>你专心做手上的活</p>
+  <div class="title">
+    <h1>🎙 AI 助播台</h1>
+    <p>帮你回答直播间的重复问题</p>
   </div>
 
   <div class="card">
     <div class="tabs">
-      <div class="tab on" id="tabLogin" onclick="mode('login')">登录</div>
-      <div class="tab" id="tabReg" onclick="mode('reg')">新用户注册</div>
+      <div class="tab on" onclick="tab('login')">登录</div>
+      <div class="tab" onclick="tab('reg')">注册新账号</div>
     </div>
 
-    <div id="paneLogin">
+    <div id="loginBox">
       <label>用户名</label>
-      <input id="l_user" autocapitalize="none" autocorrect="off" placeholder="英文或数字，如 xiaotao">
+      <input id="l_user" placeholder="填你注册时取的名字" autocapitalize="none">
       <label>密码</label>
-      <input id="l_pass" type="password" placeholder="你的密码">
-      <button id="l_btn" onclick="doLogin()">登录</button>
+      <input id="l_pass" type="password" placeholder="填你的密码">
+      <button onclick="login()">登录</button>
     </div>
 
-    <div id="paneReg" class="hide">
-      <label>用户名</label>
-      <input id="r_user" autocapitalize="none" autocorrect="off" placeholder="3~24 位字母/数字，如 laowang">
-      <div class="hint">这是你的账号，登录用。填了以后不能改。</div>
-      <label>密码</label>
-      <input id="r_pass" type="password" placeholder="至少 6 位">
-      <label>你的店 / 工作室名</label>
-      <input id="r_studio" placeholder="例如 建水紫陶·老王工作室">
-      <div class="hint">会显示在助播台顶部，观众看不到。</div>
-      <button id="r_btn" onclick="doRegister()">注册并开始</button>
+    <div id="regBox" class="hide">
+      <label>取个用户名</label>
+      <input id="r_user" placeholder="英文或数字，3~24位" autocapitalize="none">
+      <label>设个密码</label>
+      <input id="r_pass" type="password" placeholder="至少6位">
+      <button onclick="reg()">注册</button>
     </div>
 
     <div class="msg" id="msg"></div>
-  </div>
-
-  <div class="foot">
-    注册后填一次店铺资料，以后每次开播只要填直播间号
   </div>
 </div>
 
 <script>
 const $=id=>document.getElementById(id);
-function mode(m){
-  $('paneLogin').classList.toggle('hide', m!=='login');
-  $('paneReg').classList.toggle('hide', m!=='reg');
-  $('tabLogin').classList.toggle('on', m==='login');
-  $('tabReg').classList.toggle('on', m==='reg');
+function tab(t){
+  $('loginBox').classList.toggle('hide',t!=='login');
+  $('regBox').classList.toggle('hide',t!=='reg');
+  document.querySelectorAll('.tab').forEach((e,i)=>{
+    e.classList.toggle('on',(i===0&&t==='login')||(i===1&&t==='reg'));
+  });
   $('msg').className='msg';
 }
-function say(t, ok){
-  const m=$('msg'); m.textContent=t; m.className='msg '+(ok?'ok':'err');
-}
-async function post(url, body){
-  const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'},
-                              body: JSON.stringify(body||{})});
-  let d={}; try{ d=await r.json(); }catch(e){}
-  if(!r.ok || d.ok===false) throw new Error(d.error || ('HTTP '+r.status));
+function say(t,ok){ const m=$('msg'); m.textContent=t; m.className='msg '+(ok?'ok':'err'); }
+async function go(url,body){
+  const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  let d={}; try{d=await r.json();}catch(e){}
+  if(!r.ok||d.ok===false) throw new Error(d.error||('HTTP '+r.status));
   return d;
 }
-async function doLogin(){
-  const btn=$('l_btn'); btn.disabled=true; btn.textContent='登录中…';
-  try{
-    await post('/api/login', {username:$('l_user').value.trim(), password:$('l_pass').value});
-    location.href='/';
-  }catch(e){ say('登录失败：'+e.message, false); btn.disabled=false; btn.textContent='登录'; }
+async function login(){
+  try{ await go('/api/login',{username:$('l_user').value.trim(),password:$('l_pass').value}); location.href='/'; }
+  catch(e){ say(e.message); }
 }
-async function doRegister(){
-  const btn=$('r_btn'); btn.disabled=true; btn.textContent='创建中…';
-  try{
-    await post('/api/register', {
-      username:$('r_user').value.trim(),
-      password:$('r_pass').value,
-      studio_name:$('r_studio').value.trim()
-    });
-    say('注册成功，正在进入…', true);
-    location.href='/?welcome=1';
-  }catch(e){ say('注册失败：'+e.message, false); btn.disabled=false; btn.textContent='注册并开始'; }
+async function reg(){
+  try{ await go('/api/register',{username:$('r_user').value.trim(),password:$('r_pass').value}); location.href='/?welcome=1'; }
+  catch(e){ say(e.message); }
 }
-// 回车直接提交
-document.addEventListener('keydown', e=>{
-  if(e.key!=='Enter') return;
-  if(!$('paneLogin').classList.contains('hide')) doLogin(); else doRegister();
-});
 </script>
 </body>
 </html>
