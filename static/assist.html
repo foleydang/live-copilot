@@ -107,23 +107,32 @@
   <!-- ============ 设置 ============ -->
   <div id="paneSet" class="hide">
     <section>
-      <h2>① 直播间号（必填，AI 靠它读弹幕）</h2>
+      <h2>① 这次开播的直播间号</h2>
       <label>抖音直播间号</label>
       <input id="k_room" inputmode="numeric" placeholder="例如 516466932480">
-      <div class="hint">怎么找：电脑打开你的抖音直播间，网址 live.douyin.com/ 后面那串数字就是。<br>
-        填完点最下面的「保存并生效」，AI 会自动开始读弹幕，不用重启。</div>
+      <div class="hint">每次换直播间只改这一项。电脑打开你的直播间，网址 live.douyin.com/ 后面那串数字就是。</div>
+      <button class="save" style="margin-top:12px" onclick="saveRoom(event)">保存并开始读弹幕</button>
+      <div class="msg" id="roommsg"></div>
     </section>
 
     <section>
-      <h2>② AI 助手叫什么</h2>
-      <label>助手名字</label>
-      <input id="k_assistant" placeholder="小陶">
-      <label>你的店/工作室名</label>
+      <h2>② 你的店（填一次，以后不用管）</h2>
+      <label>店 / 工作室名</label>
       <input id="k_studio" placeholder="例如 建水紫陶·老王工作室">
+      <label>AI 助手叫什么</label>
+      <input id="k_assistant" placeholder="小陶">
+      <div class="hint">AI 出声时会用这个名字跟观众打招呼。</div>
     </section>
 
     <section>
-      <h2>③ 常见问题（AI 会照着答）</h2>
+      <h2>③ 商品和价格（填一次）</h2>
+      <div class="rowlist" id="k_products"></div>
+      <button class="mini" onclick="addRow('k_products','名称','价格')">＋ 加一个商品</button>
+      <div class="hint">价格可以不填，AI 会引导看小黄车；填了就能直接报价。</div>
+    </section>
+
+    <section>
+      <h2>④ 发货 / 定制 / 招呼语（填一次）</h2>
       <label>有人进来时说什么</label>
       <textarea id="k_greeting" placeholder="欢迎新进来的朋友，主播正在手工拉坯，有问题尽管打在公屏上～"></textarea>
       <label>发货怎么发</label>
@@ -135,14 +144,7 @@
     </section>
 
     <section>
-      <h2>④ 商品和价格（一行一个）</h2>
-      <div class="rowlist" id="k_products"></div>
-      <button class="mini" onclick="addRow('k_products','名称','价格')">＋ 加一个商品</button>
-      <div class="hint">价格可以不填，AI 会引导观众看小黄车。填了 AI 就能直接报价。</div>
-    </section>
-
-    <section>
-      <h2>⑤ 观众常问的手艺问题</h2>
+      <h2>⑤ 观众常问的手艺问题（填一次）</h2>
       <div class="rowlist" id="k_craft"></div>
       <button class="mini" onclick="addRow('k_craft','问题','怎么回答')">＋ 加一条问答</button>
       <div class="hint">例如 问「这个要烧几天」答「进窑要烧好几天，出窑有惊喜也有遗憾」</div>
@@ -153,8 +155,14 @@
       <textarea id="k_rules" placeholder="一行一条，例如：&#10;不议价，价格都是实价&#10;不私下交易，只走小黄车&#10;不承诺具体升值空间"></textarea>
     </section>
 
-    <button class="save" onclick="saveKb()">保存并生效</button>
+    <button class="save" onclick="saveProfile(event)">保存店铺资料</button>
     <div class="msg" id="kbmsg"></div>
+
+    <section style="margin-top:14px">
+      <h2>账号</h2>
+      <div class="hint" id="acctInfo">—</div>
+      <button class="mini" style="margin-top:10px" onclick="logout()">退出登录</button>
+    </section>
   </div>
 
   <!-- ============ 复盘 ============ -->
@@ -192,7 +200,7 @@
 <audio id="player"></audio>
 
 <script>
-let ws=null, started=false, prompts=[], assists=[], room_id='';
+let ws=null, started=false, prompts=[], assists=[], room_id='', authed=false;
 const $=id=>document.getElementById(id);
 const TOKEN=new URLSearchParams(location.search).get('t')||localStorage.getItem('lc_token')||'';
 if(new URLSearchParams(location.search).get('t')) {
@@ -283,7 +291,7 @@ function connect(delay){
 
 function handle(m){
   if(m.type==='hello'){
-    $('room').textContent=`${m.room} · AI助播台`;
+    $('room').textContent=`${m.studio_name||m.room} · AI助播台`;
     room_id=m.room_id_set?'已填':'未填';
     prompts=(m.pending||[]).map(p=>({...p,at:Date.now()}));
     renderStats(m.stats); render();
@@ -355,7 +363,6 @@ function renderStats(s){ if(s) $('stats').innerHTML=`弹幕 ${s.danmaku} · AI�
 
 async function start(){
   if(started) return;
-  if(!TOKEN){ setStatus('缺少访问令牌，请用完整链接打开','bad'); return; }
   started=true; $('startBtn').textContent='助播中';
   const p=$('player'); p.src='data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=';
   await p.play().catch(()=>{});
@@ -397,8 +404,8 @@ async function loadKb(){
     $('k_craft').innerHTML=''; (p.craft_qa||[]).forEach(x=>addRow('k_craft','问题','怎么回答',x.q,x.a));
   }catch(e){}
 }
-async function saveKb(){
-  const btn=event.target; btn.textContent='保存中…'; btn.disabled=true;
+async function saveProfile(ev){
+  const btn=ev.target; btn.textContent='保存中…'; btn.disabled=true;
   const profile={
     assistant_name:$('k_assistant').value.trim()||'小陶',
     studio_name:$('k_studio').value.trim(),
@@ -411,18 +418,64 @@ async function saveKb(){
   const m=$('kbmsg');
   try{
     const r=await fetch('/api/kb',{method:'POST',headers:h({'Content-Type':'application/json'}),
-      body:JSON.stringify({profile,room_id:$('k_room').value.trim()})});
+      body:JSON.stringify({profile})});
     const d=await r.json();
     if(!r.ok||!d.ok){ m.className='msg err'; m.textContent='保存失败：'+(d.error||r.status); }
     else{
       m.className='msg ok';
-      let t=`已生效！AI 现在认识 ${d.faqs} 类问题，并预先合成了 ${d.prewarmed} 条语音（回答会更快、更省钱）。`;
-      if(d.room_id) t+= d.pump_started?` 直播间号已保存，正在连接弹幕…回到「助播台」看状态。`:` 直播间号已保存，但弹幕还没连上（可能服务未开采集）。`;
-      m.textContent=t;
+      m.textContent=`已保存！AI 现在认识 ${d.faqs} 类问题，以后开播只需填直播间号。`;
+      if($('k_studio').value.trim()) $('room').textContent=`${$('k_studio').value.trim()} · AI助播台`;
     }
   }catch(e){ m.className='msg err'; m.textContent='网络错误：'+e.message; }
-  btn.textContent='保存并生效'; btn.disabled=false;
+  btn.textContent='保存店铺资料'; btn.disabled=false;
 }
+
+async function saveRoom(ev){
+  const rid=$('k_room').value.trim();
+  const m=$('roommsg');
+  const btn=ev.target; btn.textContent='保存中…'; btn.disabled=true;
+  try{
+    const r=await fetch('/api/room',{method:'POST',headers:h({'Content-Type':'application/json'}),
+      body:JSON.stringify({room_id:rid})});
+    const d=await r.json();
+    if(!r.ok||!d.ok){ m.className='msg err'; m.textContent='保存失败：'+(d.error||r.status); }
+    else{
+      m.className='msg ok';
+      m.textContent=d.pump_started
+        ? '已保存，正在连接弹幕。回到「助播台」看状态。'
+        : '直播间号已保存（采集器未安装，暂时读不到弹幕）。';
+      $('acctInfo').textContent=`账号 ${$('acctInfo').dataset.user||''} · 直播间 ${d.room_id}`;
+    }
+  }catch(e){ m.className='msg err'; m.textContent='网络错误：'+e.message; }
+  btn.textContent='保存并开始读弹幕'; btn.disabled=false;
+}
+
+async function logout(){
+  try{ await fetch('/api/logout',{method:'POST'}); }catch(e){}
+  localStorage.removeItem('lc_token');
+  location.href='/login';
+}
+
+/* 启动：先确认登录态，再决定是否引导去设置页 */
+async function bootstrap(){
+  try{
+    const r=await fetch('/api/me',{headers:h()});
+    if(r.status===401||r.status===403){ location.href='/login'; return; }
+    const me=await r.json();
+    authed=true;
+    if(me.studio_name) $('room').textContent=`${me.studio_name} · AI助播台`;
+    const info=$('acctInfo');
+    info.dataset.user=me.username||'';
+    info.textContent=`账号 ${me.username||'-'} · 直播间 ${me.room_id||'未填'}`;
+    if(new URLSearchParams(location.search).get('welcome')==='1'){
+      try{ history.replaceState({},'','/'); }catch(e){}
+      showTab('set');
+    } else if(!me.kb_filled){
+      setStatus('还没填店铺资料，AI 现在只能靠猜。请先到「设置」页填一下 →','bad');
+    }
+  }catch(e){}
+}
+bootstrap();
 </script>
 </body>
 </html>

@@ -38,14 +38,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect  # noqa: E402
-from fastapi.responses import FileResponse, JSONResponse  # noqa: E402
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
+from src import accounts  # noqa: E402
 from src.auth import (
     auth_enabled,
     extract_token,
     load_admin_token,
     load_tenants,
+    new_token,
     verify,
 )  # noqa: E402
 from src.config import load_config  # noqa: E402
@@ -103,15 +105,27 @@ app = FastAPI(title="AI 助播", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 
 
-# ---- 中间件：无缓存 + IP 黑名单 ----
+# ---- 中间件：无缓存 + IP 黑名单 + 登录门禁 ----
+PUBLIC_PATHS = {"/login", "/api/login", "/api/register", "/api/health", "/favicon.ico"}
+
+
+def _is_public(path: str) -> bool:
+    return path in PUBLIC_PATHS or path.startswith("/static/")
+
+
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
     ip = _client_ip(request)
     if AUTH_FAILS.blocked(f"{ip}:auth"):
         return JSONResponse({"ok": False, "error": "rate limited"}, status_code=429)
+    path = request.url.path
+    if not _is_public(path) and not _authed(request):
+        if path.startswith("/api"):
+            return _deny(request)
+        return RedirectResponse("/login", status_code=302)
     resp = await call_next(request)
     # HTML 和 API 一律 no-store，防止 token 被缓存到别人浏览器
-    if request.url.path == "/" or request.url.path.startswith("/api"):
+    if path == "/" or path.startswith("/api"):
         resp.headers.setdefault("Cache-Control", "no-store")
     return resp
 
@@ -133,17 +147,44 @@ def _deny(request: Request) -> JSONResponse:
 
 
 def _resolve(request: Request):
-    """token → (tenant, room)。未启用鉴权时退化为单房间。"""
+    """登录会话 / nginx 内部令牌 / URL token 三种渠道 → (tenant, room)。"""
     if not AUTH_ON:
         room = next(iter(registry.rooms.values()), None)
         return ({"id": "default", "name": cfg["room"]["name"], "room": ""}, room) if room else (None, None)
-    meta = _proxy_meta(request.headers)
+    meta = _session_tenant(request) or _proxy_meta(request.headers)
     if meta:
         return meta, registry.get(meta["id"])
     tenant = verify(TENANTS, extract_token(request.headers, request.query_params))
     if not tenant:
         return None, None
     return tenant, registry.get(tenant["id"])
+
+
+def _tenant_by_id(tid: str) -> dict | None:
+    for meta in TENANTS.values():
+        if meta.get("id") == tid:
+            return meta
+    return None
+
+
+def _session_tenant(req) -> dict | None:
+    """从签名 cookie 解析登录用户（Request 和 WebSocket 都适用）。"""
+    sid = req.cookies.get(accounts.COOKIE)
+    user = accounts.parse_session(sid) if sid else None
+    if not user:
+        return None
+    rec = accounts.get(user)
+    if not rec:
+        return None
+    return _tenant_by_id(rec.get("tenant_id") or user)
+
+
+def _authed(request: Request) -> bool:
+    if not AUTH_ON:
+        return True
+    if _session_tenant(request) or _proxy_meta(request.headers):
+        return True
+    return bool(verify(TENANTS, extract_token(request.headers, request.query_params)))
 
 
 def _proxy_meta(headers) -> dict | None:
@@ -191,6 +232,107 @@ async def index() -> FileResponse:
     return FileResponse(ROOT / "static" / "assist.html")
 
 
+@app.get("/login")
+async def login_page() -> FileResponse:
+    return FileResponse(ROOT / "static" / "login.html")
+
+
+# ---- 账号：注册 / 登录 / 登出 / 我是谁 ----
+def _set_session(resp, username: str, request: Request) -> None:
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    resp.set_cookie(
+        accounts.COOKIE,
+        accounts.make_session(username),
+        max_age=accounts.SESSION_TTL,
+        httponly=True,
+        samesite="lax",
+        secure=(proto == "https"),
+        path="/",
+    )
+
+
+def _me_payload(meta: dict, room) -> dict:
+    prof = room.profile if room else {}
+    return {
+        "ok": True,
+        "username": meta.get("username") or meta["id"],
+        "tenant": meta["id"],
+        "studio_name": prof.get("studio_name") or meta.get("name", ""),
+        "assistant_name": prof.get("assistant_name") or "小陶",
+        "room_id": room.room_id if room else "",
+        "kb_filled": bool(room and (prof.get("shipping") or prof.get("products"))),
+        "muted": room.pipe.muted if room else False,
+        "live": room.live if room else None,
+        "connected": bool(room and room._src and room._src.connected),
+    }
+
+
+@app.post("/api/register")
+async def api_register(request: Request, payload: dict) -> JSONResponse:
+    """注册 = 建账号 + 建租户（一个账号一个直播间）。"""
+    if not AUTH_ON:
+        return JSONResponse({"ok": False, "error": "服务未启用多租户，请配置 tenants.yaml"}, status_code=400)
+    username = accounts.normalize_username(payload.get("username"))
+    password = payload.get("password") or ""
+    err = accounts.check_username(username) or accounts.check_password(password)
+    if err:
+        return JSONResponse({"ok": False, "error": err}, status_code=400)
+    if accounts.get(username):
+        return JSONResponse({"ok": False, "error": "这个用户名已经被注册了"}, status_code=409)
+    if _tenant_by_id(username):
+        return JSONResponse({"ok": False, "error": "这个用户名已被占用，换一个吧"}, status_code=409)
+
+    studio = (payload.get("studio_name") or "").strip()[:40]
+    token = new_token()
+    meta = {
+        "id": username,
+        "name": studio or username,
+        "room": "",
+        "platform": "douyin",
+        "token": token,
+        "username": username,
+        "assist_voice": True,
+    }
+    accounts.create(username, password, username, studio)
+    TENANTS[token] = meta
+    registry.register_live(meta)
+    _write_tenants_file()
+    print(f"[account] 注册 {username}（{studio or '未填店名'}）")
+    resp = JSONResponse({"ok": True, "username": username, "tenant": username})
+    _set_session(resp, username, request)
+    return resp
+
+
+@app.post("/api/login")
+async def api_login(request: Request, payload: dict) -> JSONResponse:
+    username = accounts.normalize_username(payload.get("username"))
+    rec = accounts.authenticate(username, payload.get("password") or "")
+    if not rec:
+        AUTH_FAILS.hit(f"{_client_ip(request)}:auth")
+        return JSONResponse({"ok": False, "error": "用户名或密码不对"}, status_code=401)
+    meta = _tenant_by_id(rec.get("tenant_id") or username)
+    if not meta:
+        return JSONResponse({"ok": False, "error": "账号没有关联直播间，请联系管理员"}, status_code=500)
+    resp = JSONResponse({"ok": True, "username": username})
+    _set_session(resp, username, request)
+    return resp
+
+
+@app.post("/api/logout")
+async def api_logout() -> JSONResponse:
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(accounts.COOKIE, path="/")
+    return resp
+
+
+@app.get("/api/me")
+async def api_me(request: Request) -> JSONResponse:
+    tenant, room = _resolve(request)
+    if not room:
+        return _deny(request)
+    return JSONResponse(_me_payload(tenant, room))
+
+
 @app.get("/api/health")
 async def health() -> JSONResponse:
     rooms = [r.state() for r in registry.rooms.values()]
@@ -214,7 +356,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
     token = ws.query_params.get("t") or ws.query_params.get("token")
     ip = _client_ip(ws)
     if AUTH_ON:
-        tenant = _proxy_meta(ws.headers) or verify(TENANTS, token)
+        tenant = _session_tenant(ws) or _proxy_meta(ws.headers) or verify(TENANTS, token)
         if not tenant:
             if AUTH_FAILS.hit(f"{ip}:auth"):
                 print(f"[auth] IP {ip} 触发鉴权限流")
@@ -237,6 +379,8 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 {
                     "type": "hello",
                     "tenant": tenant["id"],
+                    "username": tenant.get("username") or tenant["id"],
+                    "studio_name": room.profile.get("studio_name") or room.name,
                     "room": room.name,
                     "platform": room.platform,
                     "assist_voice": room.pipe.assist_voice,
@@ -366,7 +510,7 @@ async def save_kb(request: Request, payload: dict) -> JSONResponse:
     tenant, room = _resolve(request)
     if not room:
         return _deny(request)
-    profile = kb_store.save(room.id, payload.get("profile") or {})
+    profile = kb_store.save(room.id, payload.get("profile") or {}) if "profile" in payload else room.profile
     # compile_faqs 只算数量，不重复 apply（kb_store.save 订阅回调已经把 apply 入队了）
     faqs = compile_faqs(profile)
 
@@ -386,6 +530,28 @@ async def save_kb(request: Request, payload: dict) -> JSONResponse:
         "pump_started": pumped,
         "digest": kb_store._updated.get(room.id, 0),
     })
+
+
+@app.post("/api/room")
+async def api_room(request: Request, payload: dict) -> JSONResponse:
+    """只改直播间号（每次开播只需这一步）。"""
+    tenant, room = _resolve(request)
+    if not room:
+        return _deny(request)
+    rid = re.sub(r"[^0-9A-Za-z_-]", "", str(payload.get("room_id") or ""))[:32]
+    if not rid:
+        return JSONResponse({"ok": False, "error": "直播间号不能为空"}, status_code=400)
+    changed = rid != room.room_id
+    if changed:
+        room.room_id = rid
+        room.stop_pump()
+        _persist_room_id(room.id, rid)
+    alive = bool(room._pump and room._pump.is_alive())
+    pumped = alive
+    if cfg.get("source") == "ws" and not alive:
+        pumped = room.start_pump(cfg.get("ws_url", ""))
+    print(f"[room] {room.id} → {rid}（changed={changed}, pump={pumped}）")
+    return JSONResponse({"ok": True, "room_id": rid, "changed": changed, "pump_started": pumped})
 
 
 def _persist_room_id(tenant_id: str, room_id: str) -> None:

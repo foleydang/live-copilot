@@ -1,23 +1,19 @@
-# Live Copilot 站点配置模板
-# 部署到：/etc/aa_nginx/conf.d/live-copilot.conf
-#
-# 占位符替换：
-#   __DOMAIN__      → live.yanten.top
-#   __ALIAS__       → 可选旧域名；没有就整行删掉，并把 server_name 里的 __ALIAS__ 一起删
-#   __CERT_NAME__   → 证书目录名（/etc/letsencrypt/live/<name>/）
-#   __PROXY_TOKEN__ → 与 systemd drop-in 里的 LIVE_COPILOT_PROXY_TOKEN 一致
-#                     （openssl rand -base64 32 | tr -d '/+=' | cut -c1-43）
-# 依赖：conf.d/00-websocket-map.conf 里的 $connection_upgrade
+# Live Copilot — nginx 反代模板
+# 鉴权由应用内登录系统负责（cookie session），nginx 只做 TLS + 反代。
+# 部署时替换域名和证书路径。
+
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
 
 server {
     listen 80;
-    server_name __DOMAIN__ __ALIAS__;
+    server_name your-domain.com;
 
-    # Let's Encrypt HTTP-01 验证（续期要用，且必须免密码）
     location ^~ /.well-known/acme-challenge/ {
         root /var/www/letsencrypt;
         default_type "text/plain";
-        auth_basic off;
     }
 
     location / { return 301 https://$host$request_uri; }
@@ -25,18 +21,14 @@ server {
 
 server {
     listen 443 ssl;
-    server_name __DOMAIN__ __ALIAS__;
+    server_name your-domain.com;
 
-    ssl_certificate     /etc/letsencrypt/live/__CERT_NAME__/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/__CERT_NAME__/privkey.pem;
+    ssl_certificate     /etc/letsencrypt/live/your-domain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
     ssl_session_timeout  5m;
     ssl_protocols  TLSv1.2 TLSv1.3;
     ssl_ciphers  HIGH:!aNULL:!MD5;
     ssl_prefer_server_ciphers  on;
-
-    # 轻量门禁：浏览器记住一次密码，之后地址栏不用带 token
-    auth_basic           "Live Copilot";
-    auth_basic_user_file /etc/aa_nginx/.htpasswd_live;
 
     client_max_body_size 2m;
 
@@ -47,9 +39,6 @@ server {
         proxy_set_header X-Real-IP         $remote_addr;
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-
-        # 免 URL token 通道（覆盖客户端同名头，防伪造）
-        proxy_set_header X-Proxy-Token     "__PROXY_TOKEN__";
 
         # WebSocket 升级
         proxy_set_header Upgrade    $http_upgrade;
