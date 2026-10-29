@@ -3,7 +3,7 @@
 #
 # 占位符替换：
 #   __DOMAIN__      → live.yanten.top
-#   __ALIAS__       → zhubo.yanten.top（不需要就删掉）
+#   __ALIAS__       → 可选旧域名；没有就整行删掉，并把 server_name 里的 __ALIAS__ 一起删
 #   __CERT_NAME__   → 证书目录名（/etc/letsencrypt/live/<name>/）
 #   __PROXY_TOKEN__ → 与 systemd drop-in 里的 LIVE_COPILOT_PROXY_TOKEN 一致
 #                     （openssl rand -base64 32 | tr -d '/+=' | cut -c1-43）

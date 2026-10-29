@@ -19,7 +19,7 @@
 
 ### 必做
 
-- [ ] 配 HTTPS（`zhubo.yanten.top`）+ nginx 反代
+- [ ] 配 HTTPS（`live.yanten.top`）+ nginx 反代
 - [ ] 装 douyinLive 采集器并做 systemd 守护（`deploy/douyinlive.service`）
 - [ ] 接 CosyVoice TTS，预热 FAQ 语音
 - [ ] 非 root 用户运行（`aizhubo`）

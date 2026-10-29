@@ -245,7 +245,7 @@ H5 目前走 `http://`。**iOS Safari 对非安全源的音频自动播放、`sp
 
 ## 四点五-B、hzserver 生产部署（当前主部署，HTTPS 已就绪）
 
-**服务地址：`https://zhubo.yanten.top/`**（手机浏览器打开，点「开始助播」）
+**服务地址：`https://live.yanten.top/`**（手机浏览器打开，点「开始助播」）
 
 已从 hkserver 迁移过来，HK 那套已 `stop` + `disable`（文件保留在 `/root/github/live-copilot`，188MB，可随时重启）。
 
@@ -277,7 +277,7 @@ H5 目前走 `http://`。**iOS Safari 对非安全源的音频自动播放、`sp
 | systemd | `live-copilot.service`（:8010，enabled）、`douyinlive.service`（:1088，disabled，需填房间号后手动起） |
 | nginx | `aa_nginx`，配置 `/etc/aa_nginx/aa_nginx.conf`；新增 `include /etc/aa_nginx/conf.d/*.conf;` |
 | 站点配置 | `/etc/aa_nginx/conf.d/zhubo.conf` + `00-websocket-map.conf` |
-| 证书 | `/etc/letsencrypt/live/zhubo.yanten.top/`，有效期至 **2027-01-24**，`certbot-renew.timer` 每日两次自动续期 |
+| 证书 | `/etc/letsencrypt/live/live.yanten.top/`，有效期至 **2027-01-24**，`certbot-renew.timer` 每日两次自动续期 |
 | DNS | `*.yanten.top` 泛解析到 47.111.181.116，**新增子域名无需任何 DNS 操作** |
 | 内存护栏 | `MemoryMax=500M` + `OOMScoreAdjust=300`（cgroup v1 实读 limit=500MB / usage=40MB） |
 
@@ -317,7 +317,7 @@ H5 侧通过 WSS 收到 `type=audio` 推送。无 token 的 WS 被拒（客户�
 
 ### ★ 办公电脑访问不了这个域名
 
-`zhubo.yanten.top` 会被公司终端防护（云壳）拦截，返回 403 拦截页：
+`live.yanten.top` 会被公司终端防护（云壳）拦截，返回 403 拦截页：
 "您要访问的域名不在安全策略默认允许的范围内"。**这是云壳拦的，不是服务的问题**
 （从 hzserver 本机和 hkserver 访问都是 200）。
 

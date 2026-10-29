@@ -48,7 +48,6 @@ https://live.yanten.top/
 ```
 
 Basic Auth 登录一次，浏览器会记住；地址栏不需要带 token。
-旧的 `https://zhubo.yanten.top/` 仍可用。
 
 ### 本地调试（3 步）
 

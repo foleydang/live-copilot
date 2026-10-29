@@ -1,0 +1,23 @@
+# 已下线旧域名：直接断连（444 不返回任何内容）
+# 部署到：/etc/aa_nginx/conf.d/00-retired-hosts.conf
+#
+# 为什么需要：泛解析 *.yanten.top 都指向本机，删掉 server_name 后请求会落到
+# 默认站点并返回 200，看起来像"还活着"。显式 444 才是真下线。
+#
+# 注意：443 段必须给一张证书（用主域名那张即可），否则 nginx -t 会报错。
+
+server {
+    listen 80;
+    server_name __RETIRED_DOMAIN__;
+    return 444;
+}
+
+server {
+    listen 443 ssl;
+    server_name __RETIRED_DOMAIN__;
+
+    ssl_certificate     /etc/letsencrypt/live/live.yanten.top/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/live.yanten.top/privkey.pem;
+
+    return 444;
+}

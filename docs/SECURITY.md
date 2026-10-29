@@ -4,7 +4,6 @@
 
 ```
 https://live.yanten.top/          ← 主入口（Basic Auth + 免 URL token）
-https://zhubo.yanten.top/         ← 旧别名，同一套配置
 http://47.111.181.116:8010/?t=…   ← 仅内网/临时调试（公网建议关掉）
 ```
 
@@ -21,7 +20,8 @@ http://47.111.181.116:8010/?t=…   ← 仅内网/临时调试（公网建议关
 - ✅ 留痕路径防穿越（`[^A-Za-z0-9_.-]` 过滤 + `.`/`..` 拒绝）
 - ✅ HTML/API 响应 `Cache-Control: no-store`
 - ✅ 前端 `history.replaceState` 抹掉 URL token
-- ✅ HTTPS（Let's Encrypt，`live.yanten.top` + `zhubo.yanten.top`，自动续期）
+- ✅ HTTPS（Let's Encrypt，`live.yanten.top`，自动续期）
+- ✅ 旧域名 `zhubo.yanten.top` 已下线（`00-retired-hosts.conf` 返回 444）
 - ✅ nginx Basic Auth + nginx 注入内部令牌（`X-Proxy-Token`，客户端同名头会被覆盖）
 - ✅ systemd 加固：`NoNewPrivileges / PrivateTmp / ProtectSystem / ReadWritePaths`
 - ✅ 日志轮转（logrotate 每天 + 50MB 上限）
