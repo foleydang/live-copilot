@@ -98,7 +98,7 @@ app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 
 
 # ---- 中间件：无缓存 + IP 黑名单 + 登录门禁 ----
-PUBLIC_PATHS = {"/login", "/api/login", "/api/register", "/api/health", "/favicon.ico"}
+PUBLIC_PATHS = {"/login", "/avatar", "/api/login", "/api/register", "/api/health", "/favicon.ico"}
 
 
 def _is_public(path: str) -> bool:
@@ -183,6 +183,12 @@ async def index() -> FileResponse:
 @app.get("/login")
 async def login_page() -> FileResponse:
     return FileResponse(ROOT / "static" / "login.html")
+
+
+@app.get("/avatar")
+async def avatar_page() -> FileResponse:
+    """小陶：摆在镜头前的助播小人（会动、会说话）。"""
+    return FileResponse(ROOT / "static" / "avatar.html")
 
 
 # ---- 账号：注册 / 登录 / 登出 / 我是谁 ----
