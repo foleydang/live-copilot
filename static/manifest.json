@@ -1,0 +1,9 @@
+{
+  "name": "AI 助播台",
+  "short_name": "助播",
+  "display": "standalone",
+  "background_color": "#0f1115",
+  "theme_color": "#0f1115",
+  "orientation": "portrait",
+  "icons": []
+}

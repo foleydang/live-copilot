@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="助播">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="manifest" href="/static/manifest.json">
 <title>AI 助播台</title>
 <style>
   :root { --bg:#0f1115; --card:#1a1d24; --accent:#4ade80; --warn:#fbbf24; --text:#e5e7eb; --dim:#9ca3af; --line:#262a33; }
@@ -89,6 +93,32 @@
   .entry-sub { font-size:12.5px; color:var(--dim); margin-top:4px; }
   .entry-arrow { font-size:26px; color:var(--dim); line-height:1; }
   .hint { font-size:12px; color:#6b7280; line-height:1.55; }
+
+  /* 试听 + 音频状态 */
+  .test-row { display:flex; gap:9px; align-items:center; }
+  .test-row button { padding:14px; border-radius:11px; border:none; background:#2b303b;
+            color:var(--text); font-size:15px; font-weight:600; cursor:pointer; flex:1; }
+  .test-row button:active { transform:scale(.97); }
+  .audio-state { font-size:13px; color:var(--dim); }
+  .audio-state.ok { color:var(--accent); }
+  .audio-state.bad { color:#ef4444; }
+
+  /* 正在播放 - 提词器 */
+  .nowplay { display:none; margin-top:14px; }
+  .nowplay.on { display:block; }
+  .nowplay .np-label { font-size:11px; color:var(--accent); font-weight:700; letter-spacing:1px; margin-bottom:6px; }
+  .nowplay .np-bar { background:var(--accent); height:3px; border-radius:2px; margin-bottom:10px;
+            animation:pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:.3} 50%{opacity:1} }
+  .nowplay .np-text { font-size:28px; line-height:1.3; font-weight:700; color:#fff;
+            min-height:36px; }
+
+  /* 音量警告 */
+  .vol-warn { display:none; background:rgba(239,68,68,.15); border:1px solid #ef4444;
+            border-radius:11px; padding:14px; margin-top:12px; }
+  .vol-warn.on { display:block; }
+  .vol-warn .vw-title { font-size:16px; font-weight:700; color:#fecaca; margin-bottom:4px; }
+  .vol-warn .vw-sub { font-size:13px; color:#fca5a5; line-height:1.5; }
 </style>
 </head>
 <body>
@@ -115,6 +145,23 @@
         <button onclick="saveRoom()">连接</button>
       </div>
       <div class="msg" id="roommsg"></div>
+    </section>
+
+    <section>
+      <h2>🔊 声音检查</h2>
+      <div class="test-row">
+        <button onclick="testAudio()">▶ 试听一声</button>
+      </div>
+      <div class="audio-state" id="audioState" style="margin-top:10px">还没试听</div>
+      <div class="vol-warn" id="volWarn">
+        <div class="vw-title">⚠️ 可能没有声音</div>
+        <div class="vw-sub">检查这部手机的音量是不是被关了，或者对录线是不是没插好。</div>
+      </div>
+      <div class="nowplay" id="nowplay">
+        <div class="np-label">● AI 正在说</div>
+        <div class="np-bar"></div>
+        <div class="np-text" id="npText"></div>
+      </div>
     </section>
 
     <section class="entry" onclick="openReport()">
@@ -199,7 +246,8 @@
 <audio id="player"></audio>
 
 <script>
-let ws=null, started=false, prompts=[], assists=[], authed=false, ME={};
+let ws=null, started=false, prompts=[], assists=[], authed=false, ME={}, wakeLock=null;
+let wsDownSince=0, reloadTimer=null;
 const $=id=>document.getElementById(id);
 const h=x=>x||{};
 const esc=t=>String(t??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -228,14 +276,42 @@ function renderStats(s){
 function connect(delay){
   const proto=location.protocol==='https:'?'wss':'ws';
   ws=new WebSocket(`${proto}://${location.host}/ws`);
-  ws.onopen=()=>{ $('dot').classList.add('on'); setStatus('已连接','ok'); };
+  ws.onopen=()=>{ $('dot').classList.add('on'); setStatus('已连接','ok'); wsDownSince=0; if(reloadTimer){clearTimeout(reloadTimer); reloadTimer=null;} };
   ws.onclose=e=>{
     $('dot').classList.remove('on');
     if(e.code===4401){ setStatus('请先登录','bad'); location.href='/login'; return; }
     const d=delay||2; setStatus(`断开，${d}秒后重连…`,'bad');
+    if(!wsDownSince) wsDownSince=Date.now();
+    // 断线超过 90 秒，直接刷页自愈
+    if(!reloadTimer) reloadTimer=setTimeout(()=>{ location.reload(); }, 90000);
     setTimeout(()=>connect(Math.min((d||2)*2,30)),(d||2)*1000);
   };
   ws.onmessage=e=>handle(JSON.parse(e.data));
+}
+
+/* 屏幕常亮（助播期间不锁屏） */
+async function requestWakeLock(){
+  try{ wakeLock=await navigator.wakeLock.request('screen');
+    wakeLock.addEventListener('release',()=>{ wakeLock=null; }); }catch(e){}
+}
+document.addEventListener('visibilitychange',()=>{
+  if(wakeLock===null && document.visibilityState==='visible' && started) requestWakeLock();
+});
+
+/* 试听 */
+function testAudio(){
+  const st=$('audioState'); st.className='audio-state'; st.textContent='正在播放…';
+  const text='测试测试，助播声音正常，能听到吗？';
+  const u=new SpeechSynthesisUtterance(text);
+  u.lang='zh-CN'; u.rate=1;
+  u.onstart=()=>{ showSpeaking(text); };
+  u.onend=()=>{ hideSpeaking(); st.className='audio-state ok'; st.textContent='✓ 播完了，你听到了吗？';
+    $('volWarn').classList.remove('on'); };
+  u.onerror=()=>{ hideSpeaking();
+    st.className='audio-state bad'; st.textContent='✕ 播放失败';
+    $('volWarn').classList.add('on'); };
+  speechSynthesis.cancel();
+  speechSynthesis.speak(u);
 }
 
 function handle(m){
@@ -255,19 +331,34 @@ function handle(m){
   if(m.type==='audio'){ assists.unshift({text:m.text,at:Date.now()}); assists=assists.slice(0,30); renderStats({assist_count:assists.length}); speak(m.text,m.audio); }
 }
 
+/* 正在播放指示 */
+function showSpeaking(text){
+  const np=$('nowplay'); np.classList.add('on');
+  $('npText').textContent=text;
+}
+function hideSpeaking(){
+  $('nowplay').classList.remove('on');
+}
+
 /* 音频队列 */
 const audioQ=[];
 let speaking=false;
 function speak(text,b64){ audioQ.push({text,b64}); if(!speaking) playNext(); }
 function playNext(){
-  if(!audioQ.length){ speaking=false; return; }
+  if(!audioQ.length){ speaking=false; hideSpeaking(); return; }
   speaking=true;
   const {text,b64}=audioQ.shift();
+  showSpeaking(text);
   const p=$('player');
   if(b64){
     p.src='data:audio/wav;base64,'+b64;
     p.onended=()=>playNext();
-    p.play().catch(()=>{ const u=new SpeechSynthesisUtterance(text); u.lang='zh-CN'; u.onend=()=>playNext(); speechSynthesis.cancel(); speechSynthesis.speak(u); });
+    p.play().catch(()=>{
+      // 播放失败 —— 多半是音量为 0 或浏览器拦截
+      $('volWarn').classList.add('on');
+      const u=new SpeechSynthesisUtterance(text); u.lang='zh-CN'; u.onend=()=>playNext();
+      speechSynthesis.cancel(); speechSynthesis.speak(u);
+    });
   } else {
     if(!('speechSynthesis' in window)){ playNext(); return; }
     const u=new SpeechSynthesisUtterance(text); u.lang='zh-CN'; u.onend=()=>playNext();
@@ -289,6 +380,7 @@ async function toggleMute(){
 async function start(){
   if(started) return;
   started=true; $('startBtn').textContent='助播中';
+  requestWakeLock();
   connect();
 }
 
