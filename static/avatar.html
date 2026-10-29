@@ -35,7 +35,7 @@
   @keyframes blink{ 0%,92%,100%{ transform:scaleY(1); } 95%{ transform:scaleY(.08); } }
 
   .sub{ width:100%; max-width:100%; min-height:132px; padding:0 4px; display:flex; align-items:flex-end; justify-content:center; }
-  .sub p{ margin:0; width:100%; font-size:clamp(18px,5.2vw,26px); line-height:1.5;
+  .sub p{ margin:0; width:100%; min-width:0; flex:1 1 auto; font-size:clamp(17px,4.8vw,25px); line-height:1.5;
     font-weight:700; text-align:center; color:#fff; text-shadow:0 2px 18px rgba(0,0,0,.75);
     word-break:break-word; overflow-wrap:anywhere; padding:0 16px; max-width:100%; }
   .sub p.dim{ color:#7c6d63; font-size:20px; font-weight:500; }
