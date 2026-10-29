@@ -1,8 +1,6 @@
 # ---- 密钥 / 凭据（绝不入库） ----
 .env
 .env.*
-tenants.yaml
-admin.yaml
 deploy/dashscope.conf
 deploy/*.conf
 

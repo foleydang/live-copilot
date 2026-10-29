@@ -1,31 +1,26 @@
 """云端服务：FastAPI + WebSocket + 多租户。
 
-一个进程服务 N 个直播间，每个租户独立的 Pipeline / 知识库 / 提词队列 / 留痕。
-除 GET / 与 /api/health 外全部需要 token。
+一个进程服务 N 个直播间，每个账号（= 一个租户）独立的 Pipeline / 知识库 / 提词队列。
+唯一的身份来源是登录 cookie（src/accounts.py），没有 token，也没有 tenants.yaml。
 
-  GET  /                 H5 助播端（静态壳，数据在鉴权后的 WS 里）
-  WS   /ws?t=<token>     实时通道：提词 + 助播语音 + 直播间状态
+  GET  /login            登录 / 注册页
+  GET  /                 助播台（需登录）
+  WS   /ws               实时通道：提词 + 助播语音 + 直播间状态（cookie 鉴权）
+  GET  /api/me           当前账号与直播间状态
   GET  /api/stats        本场统计
   GET  /api/pending      待主播跟进清单
   POST /api/danmaku      灌入一条弹幕（入队返回，不阻塞事件循环）
   POST /api/announce     触发 AI 声明口播
-  GET  /api/kb           读取本店知识库（手机设置页用）
+  GET  /api/kb           读取本店知识库
   POST /api/kb           保存知识库 → 入队热更新 + 预合成语音
-  POST /api/mute         一键静音（店主自己按）
+  POST /api/room         只改直播间号（每次开播唯一要改的）
+  POST /api/mute         一键静音
   GET  /api/usage        本店本月累计用量
   GET  /api/health       公开健康探针（含真实连接状态）
-
-管理 API（admin token，仅走 Header，禁止 URL 传参）：
-  GET  /api/admin/tenants
-  POST /api/admin/tenants
-  DELETE /api/admin/tenants/{tenant_id}
-  POST /api/admin/rotate/{tenant_id}
-  POST /api/admin/mute/{tenant_id}
 """
 from __future__ import annotations
 
 import asyncio
-import hmac
 import json
 import os
 import re
@@ -42,14 +37,6 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse  # no
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 from src import accounts  # noqa: E402
-from src.auth import (
-    auth_enabled,
-    extract_token,
-    load_admin_token,
-    load_tenants,
-    new_token,
-    verify,
-)  # noqa: E402
 from src.config import load_config  # noqa: E402
 from src.danmaku.base import Danmaku  # noqa: E402
 from src.kb_store import KBStore, compile_faqs  # noqa: E402
@@ -58,33 +45,38 @@ from src.rooms import RoomRegistry  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent
 cfg = load_config(os.environ.get("LIVE_COPILOT_CONFIG"))
-TENANTS = load_tenants(cfg)
-AUTH_ON = auth_enabled(TENANTS)
-ADMIN_TOKEN = load_admin_token(cfg)  # 为空则管理 API 全部禁用
 kb_store = KBStore()
-registry = RoomRegistry(cfg, TENANTS, kb_store)
+registry = RoomRegistry(cfg, {}, kb_store)
 
 # 鉴权失败限流：扫描器 20 次/分钟就封 2 分钟，避免日志被刷爆
 AUTH_FAILS = RateLimiter(max_hits=20, window_sec=60.0, block_sec=120.0)
-
-# nginx 反代注入的免 token 通道（配合 nginx basic auth 使用）。
-# 用途：店主自己测试时地址栏不用带 43 位 token；公网客户仍然用 ?t=<token>。
-PROXY_TOKEN = (os.environ.get("LIVE_COPILOT_PROXY_TOKEN") or "").strip()
-PROXY_TENANT = (os.environ.get("LIVE_COPILOT_PROXY_TENANT") or "").strip()
 
 # ---- 配置与启动 ----
 HOST = os.environ.get("HOST", "127.0.0.1")
 PORT = int(os.environ.get("PORT", "8010"))
 
 
+def _meta_from_account(username: str, rec: dict) -> dict:
+    """账号记录 → 房间元信息。账号即租户，没有第二套映射。"""
+    return {
+        "id": username,
+        "name": rec.get("studio_name") or username,
+        "room": str(rec.get("room_id") or ""),
+        "platform": "douyin",
+        "username": username,
+        "assist_voice": True,
+    }
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     registry.bind_loop(asyncio.get_running_loop())
-    print(
-        f"[auth] 租户鉴权 "
-        f"{'已启用（%d 个租户）' % len(TENANTS) if AUTH_ON else '未启用——公网部署请务必配置 tenants.yaml！'}"
-    )
-    print(f"[admin] 管理 API {'已启用' if ADMIN_TOKEN else '未启用（未配置 admin token）'}")
+    # 从账号表恢复所有房间（账号即租户）
+    users = accounts._load().get("users", {})
+    for username, rec in users.items():
+        if username not in registry.rooms:
+            registry.add(_meta_from_account(username, rec))
+    print(f"[accounts] 已加载 {len(users)} 个账号")
     for tid, r in registry.rooms.items():
         print(
             f"[rooms] {tid} | {r.name} | 平台={r.platform} | AI出声={r.pipe.assist_voice} "
@@ -147,24 +139,11 @@ def _deny(request: Request) -> JSONResponse:
 
 
 def _resolve(request: Request):
-    """登录会话 / nginx 内部令牌 / URL token 三种渠道 → (tenant, room)。"""
-    if not AUTH_ON:
-        room = next(iter(registry.rooms.values()), None)
-        return ({"id": "default", "name": cfg["room"]["name"], "room": ""}, room) if room else (None, None)
-    meta = _session_tenant(request) or _proxy_meta(request.headers)
-    if meta:
-        return meta, registry.get(meta["id"])
-    tenant = verify(TENANTS, extract_token(request.headers, request.query_params))
-    if not tenant:
+    """登录 cookie → (tenant, room)。只有一条鉴权路径。"""
+    meta = _session_tenant(request)
+    if not meta:
         return None, None
-    return tenant, registry.get(tenant["id"])
-
-
-def _tenant_by_id(tid: str) -> dict | None:
-    for meta in TENANTS.values():
-        if meta.get("id") == tid:
-            return meta
-    return None
+    return meta, registry.get(meta["id"])
 
 
 def _session_tenant(req) -> dict | None:
@@ -176,54 +155,14 @@ def _session_tenant(req) -> dict | None:
     rec = accounts.get(user)
     if not rec:
         return None
-    return _tenant_by_id(rec.get("tenant_id") or user)
+    return _meta_from_account(user, rec)
 
 
 def _authed(request: Request) -> bool:
-    if not AUTH_ON:
-        return True
-    if _session_tenant(request) or _proxy_meta(request.headers):
-        return True
-    return bool(verify(TENANTS, extract_token(request.headers, request.query_params)))
+    return _session_tenant(request) is not None
 
 
-def _proxy_meta(headers) -> dict | None:
-    """校验 nginx 注入的 X-Proxy-Token，命中则免 ?t= 直接放行默认租户。"""
-    if not PROXY_TOKEN:
-        return None
-    got = (headers.get("x-proxy-token") or "").strip()
-    if not got or not hmac.compare_digest(got, PROXY_TOKEN):
-        return None
-    for meta in TENANTS.values():
-        if meta["id"] == PROXY_TENANT:
-            return meta
-    return next(iter(TENANTS.values()), None)
 
-
-def _admin_header_token(request: Request) -> str | None:
-    """管理 token 只允许走 Header，禁止 URL 传参（URL 会进访问日志和浏览器历史）。"""
-    for h in ("x-admin-token", "x-token", "authorization"):
-        v = request.headers.get(h)
-        if not v:
-            continue
-        if h == "authorization" and v.lower().startswith("bearer "):
-            return v[7:].strip()
-        return v.strip()
-    return None
-
-
-def _admin_ok(request: Request) -> bool:
-    if not ADMIN_TOKEN:
-        return False
-    from src.auth import verify_admin
-    return verify_admin(ADMIN_TOKEN, _admin_header_token(request))
-
-
-def _admin_deny(request: Request) -> JSONResponse:
-    ip = _client_ip(request)
-    AUTH_FAILS.hit(f"{ip}:admin")
-    print(f"[admin] 拒绝管理操作 {request.method} {request.url.path} from {ip}")
-    return JSONResponse({"ok": False, "error": "admin unauthorized"}, status_code=403)
 
 
 # ---- 公开端点 ----
@@ -270,8 +209,6 @@ def _me_payload(meta: dict, room) -> dict:
 @app.post("/api/register")
 async def api_register(request: Request, payload: dict) -> JSONResponse:
     """注册 = 建账号 + 建租户（一个账号一个直播间）。"""
-    if not AUTH_ON:
-        return JSONResponse({"ok": False, "error": "服务未启用多租户，请配置 tenants.yaml"}, status_code=400)
     username = accounts.normalize_username(payload.get("username"))
     password = payload.get("password") or ""
     err = accounts.check_username(username) or accounts.check_password(password)
@@ -279,24 +216,11 @@ async def api_register(request: Request, payload: dict) -> JSONResponse:
         return JSONResponse({"ok": False, "error": err}, status_code=400)
     if accounts.get(username):
         return JSONResponse({"ok": False, "error": "这个用户名已经被注册了"}, status_code=409)
-    if _tenant_by_id(username):
-        return JSONResponse({"ok": False, "error": "这个用户名已被占用，换一个吧"}, status_code=409)
 
     studio = (payload.get("studio_name") or "").strip()[:40]
-    token = new_token()
-    meta = {
-        "id": username,
-        "name": studio or username,
-        "room": "",
-        "platform": "douyin",
-        "token": token,
-        "username": username,
-        "assist_voice": True,
-    }
     accounts.create(username, password, username, studio)
-    TENANTS[token] = meta
+    meta = _meta_from_account(username, accounts.get(username))
     registry.register_live(meta)
-    _write_tenants_file()
     print(f"[account] 注册 {username}（{studio or '未填店名'}）")
     resp = JSONResponse({"ok": True, "username": username, "tenant": username})
     _set_session(resp, username, request)
@@ -345,7 +269,6 @@ async def health() -> JSONResponse:
             "ok": ok,
             "rooms_count": len(rooms),
             "rooms": rooms,
-            "auth": AUTH_ON,
         }
     )
 
@@ -353,19 +276,15 @@ async def health() -> JSONResponse:
 # ---- 租户端点（H5 用） ----
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket) -> None:
-    token = ws.query_params.get("t") or ws.query_params.get("token")
     ip = _client_ip(ws)
-    if AUTH_ON:
-        tenant = _session_tenant(ws) or _proxy_meta(ws.headers) or verify(TENANTS, token)
-        if not tenant:
-            if AUTH_FAILS.hit(f"{ip}:auth"):
-                print(f"[auth] IP {ip} 触发鉴权限流")
-            print(f"[auth] 拒绝 WS 连接 from {ip}")
-            await ws.close(code=4401, reason="unauthorized")
-            return
-        AUTH_FAILS.clear(f"{ip}:auth")
-    else:
-        tenant = {"id": "default", "name": cfg["room"]["name"]}
+    tenant = _session_tenant(ws)
+    if not tenant:
+        if AUTH_FAILS.hit(f"{ip}:auth"):
+            print(f"[auth] IP {ip} 触发鉴权限流")
+        print(f"[auth] 拒绝 WS 连接 from {ip}")
+        await ws.close(code=4401, reason="unauthorized")
+        return
+    AUTH_FAILS.clear(f"{ip}:auth")
     room = registry.get(tenant["id"])
     if not room:
         await ws.close(code=4404, reason="no such room")
@@ -555,26 +474,9 @@ async def api_room(request: Request, payload: dict) -> JSONResponse:
 
 
 def _persist_room_id(tenant_id: str, room_id: str) -> None:
-    """把房间号同时写回 tenants.yaml 和内存 TENANTS，重启后仍在，避免被其他 admin 操作覆盖回去。"""
-    import yaml
-
-    # 同步内存：防止 admin_add/remove/rotate 触发 _write_tenants_file 时把 room_id 写回旧值
-    for meta in TENANTS.values():
-        if meta.get("id") == tenant_id:
-            meta["room"] = room_id
-
-    f = ROOT / "tenants.yaml"
-    if not f.exists():
-        return
-    try:
-        data = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
-        for e in data.get("tenants", []):
-            if str(e.get("id")) == tenant_id:
-                e["room"] = room_id
-        f.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
-        print(f"[kb] 房间号已持久化：{tenant_id} → {room_id}")
-    except Exception as e:  # noqa: BLE001
-        print(f"[kb] 房间号持久化失败（本次会话仍有效）：{e}")
+    """把房间号写回账号记录，重启后仍在。"""
+    accounts.update(tenant_id, room_id=room_id)
+    print(f"[room] 房间号已持久化：{tenant_id} → {room_id}")
 
 
 @app.post("/api/mute")
@@ -621,176 +523,6 @@ def _usage_for(room) -> dict:
         "danmaku": room.pipe.stats.get("danmaku", 0),
         "dropped": u.get("dropped", 0),
     }
-
-
-# ============ 管理 API：让运营者一条命令加客户，不用 SSH ============
-
-
-def _write_tenants_file() -> None:
-    """把内存中的租户表落盘，重启后仍在。room_id 优先取内存 TENANTS，缺失时回退到 registry。"""
-    import yaml
-
-    entries = []
-    seen = set()
-    for tok, meta in TENANTS.items():
-        if meta["id"] in seen:
-            continue
-        seen.add(meta["id"])
-        room_id = str(meta.get("room") or "").strip()
-        # 兜底：内存 meta 没 room_id 时去 registry 取（避免 admin add/remove 清掉刚填的号）
-        if not room_id:
-            rm = registry.get(meta["id"])
-            if rm:
-                room_id = rm.room_id
-        e = {
-            "id": meta["id"],
-            "name": meta["name"],
-            "room": room_id,
-            "platform": meta.get("platform") or "douyin",
-            "token": tok,
-        }
-        if meta.get("voice"):
-            e["voice"] = meta["voice"]
-        if "assist_voice" in meta:
-            e["assist_voice"] = bool(meta["assist_voice"])
-        entries.append(e)
-    f = ROOT / "tenants.yaml"
-    f.write_text(
-        "# 租户表（含密钥，勿提交公开仓库）\n"
-        + yaml.safe_dump({"tenants": entries}, allow_unicode=True, sort_keys=False),
-        encoding="utf-8",
-    )
-    os.chmod(f, 0o600)
-
-
-@app.get("/api/admin/tenants")
-async def admin_list(request: Request) -> JSONResponse:
-    if not ADMIN_TOKEN or not _admin_ok(request):
-        return _admin_deny(request)
-    out = []
-    for tok, meta in TENANTS.items():
-        room = registry.get(meta["id"])
-        out.append(
-            {
-                "id": meta["id"],
-                "name": meta["name"],
-                "platform": meta.get("platform") or "douyin",
-                "room": room.room_id if room else meta.get("room", ""),
-                "assist_voice": room.pipe.assist_voice if room else None,
-                "muted": room.pipe.muted if room else False,
-                "live": room.live if room else None,
-                "connected": bool(room and room._src and room._src.connected),
-                "kb_filled": bool(room and (room.profile.get("shipping") or room.profile.get("products"))),
-                "stats": room.pipe.stats if room else {},
-                "usage": _usage_for(room) if room else None,
-                "url": f"?t={tok}",
-            }
-        )
-    return JSONResponse({"ok": True, "tenants": out, "rooms": len(registry.rooms)})
-
-
-@app.post("/api/admin/tenants")
-async def admin_add(request: Request, payload: dict) -> JSONResponse:
-    """运行时新增客户：立即生效，无需重启服务。"""
-    if not ADMIN_TOKEN or not _admin_ok(request):
-        return _admin_deny(request)
-    from src.auth import new_token
-
-    tid = re.sub(r"[^A-Za-z0-9_.-]", "", str(payload.get("id") or "").strip())
-    name = str(payload.get("name") or "").strip()
-    if not tid or not name:
-        return JSONResponse({"ok": False, "error": "id 和 name 必填"}, status_code=400)
-    if tid in registry.rooms:
-        return JSONResponse({"ok": False, "error": f"租户 {tid} 已存在"}, status_code=409)
-
-    platform = str(payload.get("platform") or "douyin").strip()
-    if platform not in ("douyin", "channels"):
-        platform = "douyin"
-    token = new_token()
-    meta = {
-        "id": tid,
-        "name": name,
-        "room": str(payload.get("room") or "").strip(),
-        "platform": platform,
-        "token": token,
-    }
-    if str(payload.get("voice") or "").strip():
-        meta["voice"] = str(payload["voice"]).strip()
-    if "assist_voice" in payload:
-        meta["assist_voice"] = bool(payload["assist_voice"])
-
-    TENANTS[token] = meta
-    room = registry.register_live(meta)
-    _write_tenants_file()
-    print(f"[admin] 新增租户 {tid}（{name}，平台={platform}，AI出声={room.pipe.assist_voice}）")
-    return JSONResponse(
-        {
-            "ok": True,
-            "id": tid,
-            "token": token,
-            "assist_voice": room.pipe.assist_voice,
-            "pump_started": bool(room._pump and room._pump.is_alive()),
-            "note": "视频号平台已自动关闭 AI 出声" if platform == "channels" and not room.pipe.assist_voice else None,
-        }
-    )
-
-
-@app.delete("/api/admin/tenants/{tenant_id}")
-async def admin_remove(request: Request, tenant_id: str) -> JSONResponse:
-    if not ADMIN_TOKEN or not _admin_ok(request):
-        return _admin_deny(request)
-    target = None
-    for tok, meta in list(TENANTS.items()):
-        if meta["id"] == tenant_id:
-            target = tok
-            break
-    if not target:
-        return JSONResponse({"ok": False, "error": "租户不存在"}, status_code=404)
-    TENANTS.pop(target, None)
-    registry.remove(tenant_id)
-    _write_tenants_file()
-    print(f"[admin] 删除租户 {tenant_id}")
-    return JSONResponse({"ok": True, "removed": tenant_id})
-
-
-@app.post("/api/admin/rotate/{tenant_id}")
-async def admin_rotate(request: Request, tenant_id: str) -> JSONResponse:
-    """重置某客户的访问链接（链接泄露时用）。"""
-    if not ADMIN_TOKEN or not _admin_ok(request):
-        return _admin_deny(request)
-    from src.auth import new_token
-
-    old = None
-    for tok, meta in TENANTS.items():
-        if meta["id"] == tenant_id:
-            old = tok
-            break
-    if not old:
-        return JSONResponse({"ok": False, "error": "租户不存在"}, status_code=404)
-    meta = TENANTS.pop(old)
-    token = new_token()
-    meta["token"] = token
-    TENANTS[token] = meta
-    _write_tenants_file()
-    return JSONResponse({"ok": True, "id": tenant_id, "token": token})
-
-
-@app.post("/api/admin/mute/{tenant_id}")
-async def admin_mute(request: Request, tenant_id: str) -> JSONResponse:
-    if not ADMIN_TOKEN or not _admin_ok(request):
-        return _admin_deny(request)
-    room = registry.get(tenant_id)
-    if not room:
-        return JSONResponse({"ok": False, "error": "租户不存在"}, status_code=404)
-    body = {}
-    try:
-        body = await request.json()
-    except Exception:  # noqa: BLE001
-        pass
-    muted = bool(body.get("muted", True))
-    room.set_muted(muted)
-    print(f"[admin] {tenant_id} muted={muted}")
-    return JSONResponse({"ok": True, "muted": muted})
 
 
 # ============ 后台维护 ============
